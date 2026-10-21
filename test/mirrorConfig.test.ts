@@ -63,9 +63,23 @@ describe('mirror configuration', () => {
     expect(isValidMirrorName('')).toBe(false)
   })
 
+  it('refuses a name that ends in a space or a dot', () => {
+    // Windows strips a trailing space and a trailing dot, so the folder on
+    // disk would not carry the name the manifest knows it by.
+    expect(isValidMirrorName('Docs ')).toBe(false)
+    expect(isValidMirrorName('Docs.')).toBe(false)
+    expect(isValidMirrorName('Docs.2026')).toBe(true)
+  })
+
   it('suggests a Drive path from the name', () => {
     expect(suggestDrivePath('Photos')).toBe('Photos')
     expect(suggestDrivePath('Archive/Photos')).toBe('Archive/Photos')
+  })
+
+  it('suggests a Drive path its own validator accepts', () => {
+    expect(suggestDrivePath('a\\b')).toBe('a-b')
+    expect(isValidDrivePath(suggestDrivePath('a\\b'))).toBe(true)
+    expect(isValidDrivePath(suggestDrivePath('Docs: Photos'))).toBe(true)
   })
 
   it('refuses a candidate whose root is not a folder on this computer', () => {
@@ -83,10 +97,23 @@ describe('mirror configuration', () => {
     expect(validateMirror({ name: 'Notes', root: 'F:\\Notes', drivePath: 'Notes' }, existing)).toEqual([])
   })
 
-  it('reports both problems when a candidate breaks two rules', () => {
+  it('reports the name problem for a name that is taken', () => {
     const existing = [{ name: 'Docs', root: 'E:\\Docs', drivePath: 'Docs', enabled: true }]
     const problems = validateMirror({ name: 'Docs', root: 'E:\\Docs\\Notes', drivePath: 'Docs' }, existing)
-    expect(problems.map((p) => p.field)).toEqual(['name', 'root'])
+    expect(problems.map((p) => p.field)).toEqual(['name'])
+  })
+
+  it('refuses a second mirror on a root that is already mirrored', () => {
+    const existing = [{ name: 'Docs', root: 'E:\\Docs', drivePath: 'Docs', enabled: true }]
+    const problems = validateMirror({ name: 'Archive', root: 'E:\\Docs', drivePath: 'Archive' }, existing)
+    expect(problems.map((p) => p.field)).toEqual(['root'])
+    expect(problems[0]?.message).toContain('E:\\Docs')
+  })
+
+  it('reports every problem it finds', () => {
+    const existing = [{ name: 'Docs', root: 'E:\\Docs', drivePath: 'Docs', enabled: true }]
+    const problems = validateMirror({ name: 'Fresh', root: 'E:\\Docs\\Sub', drivePath: 'Bad//Path' }, existing)
+    expect(problems.map((p) => p.field)).toEqual(['drivePath', 'root'])
   })
 
   it('lets a removed mirror be added again under the same root', () => {
@@ -98,6 +125,25 @@ describe('mirror configuration', () => {
     const existing = [{ name: 'Docs', root: 'E:\\OldDocs', drivePath: 'Docs', enabled: false, removedAt: '2026-10-01T00:00:00.000Z' }]
     const problems = validateMirror({ name: 'Docs', root: 'E:\\NewDocs', drivePath: 'Docs' }, existing)
     expect(problems.map((p) => p.field)).toContain('root')
+    // The message has to name both roots: the one the mirror had and the
+    // one the user is asking for.
+    expect(problems[0]?.message).toContain('E:\\OldDocs')
+    expect(problems[0]?.message).toContain('E:\\NewDocs')
+  })
+
+  it('keeps the root of a removed mirror reserved', () => {
+    const existing = [{ name: 'Old', root: 'E:\\Old', drivePath: 'Old', enabled: false, removedAt: '2026-10-01T00:00:00.000Z' }]
+    const problems = validateMirror({ name: 'Fresh', root: 'E:\\Old', drivePath: 'Fresh' }, existing)
+    expect(problems.map((p) => p.field)).toEqual(['root'])
+    // The message has to say the mirror is gone, not that it is running.
+    expect(problems[0]?.message).toContain('removed')
+  })
+
+  it('keeps a folder inside the root of a removed mirror reserved', () => {
+    const existing = [{ name: 'Old', root: 'E:\\Old', drivePath: 'Old', enabled: false, removedAt: '2026-10-01T00:00:00.000Z' }]
+    const problems = validateMirror({ name: 'Fresh', root: 'E:\\Old\\Sub', drivePath: 'Fresh' }, existing)
+    expect(problems.map((p) => p.field)).toEqual(['root'])
+    expect(problems[0]?.message).toContain('removed')
   })
 
   it('takes the Drive folder the manifest recorded', () => {

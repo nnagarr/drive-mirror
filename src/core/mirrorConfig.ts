@@ -59,14 +59,17 @@ const UNC_ROOT = /^\\\\/
  * True when `name` can be used as the name of a mirror.
  *
  * The name is the key the manifest knows the mirror by, so it has to be a
- * name Windows can hold: not empty, not `.` or `..`, and without the
- * characters Windows forbids in a folder name.
+ * name Windows can hold: not empty, not `.` or `..`, without the
+ * characters Windows forbids in a folder name, and not ending in a space
+ * or a dot - Windows strips both, so the folder on disk would not carry
+ * the name the manifest knows it by.
  */
 export function isValidMirrorName(name: string): boolean {
   if (name.length === 0) return false
   if (name === '.' || name === '..') return false
   if (ILLEGAL_NAME_CHARS.test(name)) return false
   if (CONTROL_CHARS.test(name)) return false
+  if (name.endsWith(' ') || name.endsWith('.')) return false
   return true
 }
 
@@ -112,8 +115,15 @@ export function overlaps(rootA: string, rootB: string): boolean {
  * name, a root that is not a folder on this machine, a Drive path that is
  * not a path - and against the mirrors that exist already: the name must
  * be free, and the root must not overlap a root that is already mirrored.
- * The rules are apart, so a candidate that breaks two gets both problems
- * and the user is told everything at once.
+ * A candidate that breaks two rules gets both problems, so the user is
+ * told everything at once.
+ *
+ * A mirror the user removed keeps its name and its folder. The same name
+ * on the same folder puts it back and re-adopts the history the manifest
+ * still holds; the same name on another folder would inherit that history
+ * and read every old path as absent, so it is refused; and no other mirror
+ * may take the folder while it is reserved, or the mirror the user
+ * removed and the one they added would both be live on it.
  */
 export function validateMirror(
   candidate: { name: string; root: string; drivePath: string },
@@ -135,16 +145,18 @@ export function validateMirror(
     const sameName = other.name.toLowerCase() === candidate.name.toLowerCase()
     const sameRoot = normaliseRoot(other.root) === normaliseRoot(candidate.root)
 
-    if (sameName && other.removedAt) {
-      // A mirror the user removed keeps its name for its own folder only.
-      // The same folder re-adopts the history the manifest still holds; a
-      // different folder would inherit that history and read every old
-      // path as absent, so it is refused.
-      if (!sameRoot) {
-        problems.push({
-          field: 'root',
-          message: `The mirror ${other.name} has the root ${other.root}, so it cannot be added with the root ${candidate.root}.`,
-        })
+    if (other.removedAt) {
+      // The mirror is gone, but its name and its folder are still its own
+      // until it is forgotten.
+      if (sameName) {
+        if (!sameRoot) {
+          problems.push({
+            field: 'root',
+            message: `The removed mirror ${other.name} has the root ${other.root}, so it cannot be added with the root ${candidate.root}.`,
+          })
+        }
+      } else if (overlaps(candidate.root, other.root)) {
+        problems.push({ field: 'root', message: overlapMessage(candidate.root, other) })
       }
       continue
     }
@@ -154,9 +166,10 @@ export function validateMirror(
         field: 'name',
         message: `There is already a mirror called ${other.name}.`,
       })
+      continue
     }
 
-    if (!sameRoot && overlaps(candidate.root, other.root)) {
+    if (overlaps(candidate.root, other.root)) {
       problems.push({ field: 'root', message: overlapMessage(candidate.root, other) })
     }
   }
@@ -167,14 +180,15 @@ export function validateMirror(
 /**
  * The Drive path to offer for a mirror with this name.
  *
- * The name is the suggestion, and a name that carries a character Drive
- * cannot hold in a folder cannot be part of a Drive path either, so those
+ * The name is the suggestion, and a name that carries a character a Drive
+ * folder cannot hold cannot be part of a Drive path either, so those
  * characters become `-` - the same characters the checks above reject.
+ * The result is a path `isValidDrivePath` accepts.
  */
 export function suggestDrivePath(name: string): string {
   return name
     .split('/')
-    .map((segment) => segment.replace(/[<>:"|?*]/g, '-').replace(/[\u0000-\u001f]/g, '-').trim())
+    .map((segment) => segment.replace(/[<>:"\\|?*]/g, '-').replace(/[\u0000-\u001f]/g, '-').trim())
     .filter((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
     .join('/')
 }
@@ -226,6 +240,17 @@ function isUsableRoot(root: string): boolean {
 function overlapMessage(candidateRoot: string, other: MirrorConfig): string {
   const candidate = normaliseRoot(candidateRoot)
   const existing = normaliseRoot(other.root)
+  if (other.removedAt) {
+    // The mirror is gone, but its folder is reserved until it is
+    // forgotten, and the user has to be told it is gone.
+    if (candidate === existing) {
+      return `The folder ${candidateRoot} belongs to the removed mirror ${other.name}, and stays reserved until that mirror is forgotten.`
+    }
+    if (existing.startsWith(candidate + '/')) {
+      return `The folder of the removed mirror ${other.name} (${other.root}) is inside ${candidateRoot}, and stays reserved until that mirror is forgotten.`
+    }
+    return `${candidateRoot} is inside the folder of the removed mirror ${other.name} (${other.root}), which stays reserved until that mirror is forgotten.`
+  }
   if (candidate === existing) {
     return `The folder ${candidateRoot} is already mirrored as ${other.name}.`
   }
