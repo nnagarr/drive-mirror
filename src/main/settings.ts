@@ -31,12 +31,10 @@ import type { MirrorConfig } from '../core/mirrorConfig'
 // settings are the app's public view of what it mirrors.
 export type { MirrorConfig } from '../core/mirrorConfig'
 
-/** How often the app syncs on its own. */
-export type ScheduleShape =
-  | { kind: 'every-hours'; everyHours: number }
-  | { kind: 'daily'; at: string }
-  | { kind: 'every-days'; everyDays: number }
-  | { kind: 'weekly'; day: number; at: string }
+// The shape of a schedule is arithmetic on the clock, so it lives with the
+// rest of the core too.
+import type { ScheduleShape } from '../core/schedule'
+export type { ScheduleShape } from '../core/schedule'
 
 export interface ScheduleConfig {
   /** Whether the app syncs on its own at all. */
