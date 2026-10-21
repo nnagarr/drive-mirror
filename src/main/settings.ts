@@ -24,20 +24,12 @@ import { readFileSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import type { MirrorConfig } from '../core/mirrorConfig'
 
-/** One of the trees the user mirrors. */
-export interface MirrorConfig {
-  /** The name of the tree. It is the key the manifest knows it by. */
-  name: string
-  /** The folder on this machine. */
-  root: string
-  /** Where it lives under My Drive. */
-  drivePath: string
-  /** Whether the app syncs it. */
-  enabled: boolean
-  /** ISO timestamp. Set when the mirror is removed. */
-  removedAt?: string
-}
+// The rules for a mirror live with the rest of the core, so they can be
+// tested without Electron. The type is re-exported here, because the
+// settings are the app's public view of what it mirrors.
+export type { MirrorConfig } from '../core/mirrorConfig'
 
 /** How often the app syncs on its own. */
 export type ScheduleShape =
