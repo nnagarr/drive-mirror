@@ -1,7 +1,7 @@
 # Drive Mirror — Design
 
 **Date:** 2026-10-21
-**Status:** Draft for approval (rev 9)
+**Status:** Draft for approval (rev 10)
 **One-line:** A native-feeling Windows 11 desktop app that mirrors four folders on `E:` up to `My Drive/` on Google Drive, with a persistent checksum manifest and multiple anti-catastrophe guards.
 
 ---
