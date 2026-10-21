@@ -799,7 +799,7 @@ describe('diffMirror --- group N (Google-native)', () => {
     expect(kinds(p)).toEqual(['export-native'])
   })
 
-  it('archives a user-edited export before overwriting it (N2)', async () => {
+  it('overwrites a user-edited export, and keeps no copy of it (N2)', async () => {
     const p = await plan({
       local: localTree({ 'budget.csv': { md5: 'x' } }),
       drive: driveTree([
@@ -822,9 +822,9 @@ describe('diffMirror --- group N (Google-native)', () => {
 
     const action = actions(p).find((a) => a.kind === 'export-native')
     expect(action).toBeDefined()
+    // The user's edited export is replaced, and nothing is kept of it.
     if (action && action.kind === 'export-native') {
-      // The executor must archive the user's edited copy before overwriting.
-      expect(action.archiveLocalFirst).toBe(true)
+      expect('archiveLocalFirst' in action).toBe(false)
     }
   })
 

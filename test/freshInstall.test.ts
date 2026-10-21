@@ -44,7 +44,7 @@ describe('a first install', () => {
   it('keeps everything inside its own data directory', () => {
     const settings = defaultSettings()
     const dir = appDataDir()
-    for (const path of [settings.manifestPath, ...settings.backupPaths, settings.supersededPath]) {
+    for (const path of [settings.manifestPath, ...settings.backupPaths]) {
       expect(path.startsWith(dir)).toBe(true)
     }
   })

@@ -1,5 +1,4 @@
-﻿import { describe, it, expect } from 'vitest'
-import { existsSync } from 'node:fs'
+import { describe, it, expect } from 'vitest'
 import { mkdtemp, mkdir, writeFile, readdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -61,31 +60,6 @@ function plan(steps: PlanStep[]): SyncPlan {
   return { steps, reports: [] }
 }
 
-/** Every archived copy under the archive directory, sidecars excluded. */
-async function archivedFiles(archiveDir: string): Promise<string[]> {
-  const out: string[] = []
-  async function walk(dir: string, prefix: string): Promise<void> {
-    let entries: string[]
-    try {
-      entries = await readdir(dir)
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      const abs = join(dir, entry)
-      const rel = prefix ? `${prefix}/${entry}` : entry
-      const items = await readdir(abs).catch(() => null)
-      if (items === null) {
-        if (!rel.endsWith('.meta.json')) out.push(rel)
-      } else {
-        await walk(abs, rel)
-      }
-    }
-  }
-  await walk(archiveDir, '')
-  return out
-}
-
 describe('executePlan', () => {
   it('runs folders before uploads, uploads before downloads, downloads before trashes', async () => {
     const box = await sandbox()
@@ -126,7 +100,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     // The reads and the archive of the trashed file are not actions of the
@@ -140,11 +113,7 @@ describe('executePlan', () => {
       'trash',
       'untrash',
     ])
-    const actions = box.client.calls.filter(
-      (c) =>
-        mutating.has(c.op) &&
-        !(c.op === 'download' && (c.dest ?? '').startsWith(box.archiveDir)),
-    )
+    const actions = box.client.calls.filter((c) => mutating.has(c.op))
     expect(actions.map((c) => c.op)).toEqual([
       'createFolder',
       'createFile',
@@ -153,56 +122,10 @@ describe('executePlan', () => {
     ])
   })
 
-  it('archives the Drive bytes before trashing', async () => {
+  it('trashes the Drive file and keeps no copy of it', async () => {
     const box = await sandbox()
     box.client.add('D1', 'a.psd', { content: Buffer.from('the drive copy') })
 
-    // The archive has to be written BEFORE the trash is issued: the
-    // archive is the only second copy of the file.
-    let archivedWhenTrashed = false
-    box.client.onCall = (call) => {
-      if (call.op === 'trash') {
-        archivedWhenTrashed = existsSync(join(box.archiveDir, 'Medicine', 'a.psd'))
-      }
-    }
-
-    const p = plan([
-      {
-        action: { kind: 'trash', relPath: 'a.psd', driveFileId: 'D1' },
-        ops: [{ op: 'del-file', path: 'a.psd' }],
-      },
-    ])
-
-    await executePlan(p, {
-      client: box.client,
-      store: box.store,
-      manifest: box.manifest,
-      root: box.root,
-      archiveDir: box.archiveDir,
-    })
-
-    // The archive call must come before the trash call.
-    const ops = box.client.calls.map((c) => c.op)
-    expect(ops.indexOf('download')).toBeLessThan(ops.indexOf('trash'))
-    expect(archivedWhenTrashed).toBe(true)
-
-    const files = await archivedFiles(box.archiveDir)
-    expect(files).toHaveLength(1)
-    expect(files[0]).toContain('Medicine/a.psd/')
-
-    const abs = join(box.archiveDir, files[0]!.replace(/\//g, '\\'))
-    const content = await readFile(abs, 'utf8')
-    expect(content).toBe('the drive copy')
-  })
-
-  it('skips the trash when the archive write fails', async () => {
-    const box = await sandbox()
-    // A regular file where the archive directory should be: every write
-    // under it fails.
-    const blocked = join(box.dir, 'blocked')
-    await writeFile(blocked, 'not a directory')
-    box.client.add('D1', 'a.psd')
-
     const p = plan([
       {
         action: { kind: 'trash', relPath: 'a.psd', driveFileId: 'D1' },
@@ -215,47 +138,14 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: blocked,
     })
 
-    expect(box.client.calls.some((c) => c.op === 'trash')).toBe(false)
-    expect(result.errors).toHaveLength(1)
-    expect(result.errors[0]?.relPath).toBe('a.psd')
-    // The manifest write did not happen either.
-    expect(box.manifest.files['a.psd']).toBeUndefined()
-  })
-
-  it('skips the content replacement when the archive write fails', async () => {
-    const box = await sandbox()
-    const blocked = join(box.dir, 'blocked')
-    await writeFile(blocked, 'not a directory')
-    await localFile(box.root, 'a.psd')
-    box.client.add('D1', 'a.psd')
-
-    const p = plan([
-      {
-        action: {
-          kind: 'replace-content',
-          relPath: 'a.psd',
-          localPath: 'a.psd',
-          driveFileId: 'D1',
-          md5: 'm2',
-          size: 11,
-        },
-        ops: [],
-      },
-    ])
-
-    const result = await executePlan(p, {
-      client: box.client,
-      store: box.store,
-      manifest: box.manifest,
-      root: box.root,
-      archiveDir: blocked,
-    })
-
-    expect(box.client.calls.some((c) => c.op === 'updateContent')).toBe(false)
-    expect(result.errors).toHaveLength(1)
+    // The file goes to the Drive trash, where Google keeps it for thirty
+    // days. Nothing is kept locally: the executor is given nowhere to put
+    // a copy.
+    expect(box.client.calls.some((c) => c.op === 'trash')).toBe(true)
+    expect(result.errors).toHaveLength(0)
+    expect(await readdir(box.archiveDir)).toEqual([])
   })
 
   it('continues after a per-file failure', async () => {
@@ -292,7 +182,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     // The other file still synced.
@@ -323,7 +212,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     const intentAt = box.client.trace.indexOf('journal:intent:create-upload')
@@ -357,7 +245,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     const intentAt = box.client.trace.indexOf('journal:intent:untrash')
@@ -416,7 +303,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     expect(result.errors).toHaveLength(1)
@@ -464,7 +350,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     for (const call of box.client.calls) {
@@ -522,7 +407,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     expect(result.uploaded).toBe(1)
@@ -534,7 +418,7 @@ describe('executePlan', () => {
     expect(result.errors).toEqual([])
   })
 
-  it('archives the local bytes before a download that would overwrite them', async () => {
+  it('replaces the local file with the Drive copy, and keeps no copy of the old one', async () => {
     const box = await sandbox()
     await localFile(box.root, 'a.psd', 'the local work')
     box.client.add('D1', 'a.psd', { content: Buffer.from('the drive version') })
@@ -547,7 +431,6 @@ describe('executePlan', () => {
           localPath: 'a.psd',
           driveFileId: 'D1',
           size: 16,
-          archiveLocalFirst: true,
         },
         ops: [],
       },
@@ -558,16 +441,12 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
-    const files = await archivedFiles(box.archiveDir)
-    expect(files).toHaveLength(1)
-    const abs = join(box.archiveDir, files[0]!.replace(/\//g, '\\'))
-    expect(await readFile(abs, 'utf8')).toBe('the local work')
-
-    // The local file now holds the Drive version.
+    // The local file now holds the Drive version, and the old local work
+    // is not kept anywhere.
     expect(await readFile(join(box.root, 'a.psd'), 'utf8')).toBe('the drive version')
+    expect(await readdir(box.archiveDir)).toEqual([])
   })
 
   it('records the new folder id in the manifest', async () => {
@@ -582,7 +461,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     expect(box.manifest.dirs['renders']).toBeDefined()
@@ -612,7 +490,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     const created = box.client.calls.find((c) => c.op === 'createFile')
@@ -641,7 +518,6 @@ describe('executePlan', () => {
       store: box.store,
       manifest: box.manifest,
       root: box.root,
-      archiveDir: box.archiveDir,
     })
 
     const downloaded = box.client.calls.find((c) => c.op === 'download')
@@ -675,8 +551,7 @@ describe('the progress a run reports', () => {
         store: box.store,
         manifest: box.manifest,
         root: box.root,
-        archiveDir: box.archiveDir,
-        onProgress: (event) => events.push(event),
+          onProgress: (event) => events.push(event),
       },
     )
 

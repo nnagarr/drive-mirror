@@ -75,10 +75,9 @@ export function joinPath(...segments: string[]): string {
 /**
  * Make a single path segment safe to write to disk.
  *
- * Illegal filename characters and control characters become `_`. This is used
- * for the superseded-archive store, where a Drive path can contain characters
- * Windows forbids; without this, a `:` in a name would be interpreted as an
- * NTFS alternate data stream.
+ * Illegal filename characters and control characters become `_`. Without
+ * this, a `:` in a name would be interpreted as an NTFS alternate data
+ * stream.
  */
 export function sanitizePathSegment(seg: string): string {
   return seg

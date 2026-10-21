@@ -412,14 +412,6 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         const current = await currentSettings()
         await shell.openPath(current.manifestPath)
       },
-      async revealSuperseded() {
-        const current = await currentSettings()
-        await shell.openPath(current.supersededPath)
-      },
-      async pruneSuperseded() {
-        const current = await currentSettings()
-        return pruneSuperseded(current.supersededPath)
-      },
       async appIcon() {
         // The interface shows the icon in the top bar. It is sent as a
         // data URL, because the renderer cannot read a file of its own.
@@ -500,6 +492,10 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
     // its history goes, and the copy of the bytes it replaced stays.
     await runner.pruneRemovedMirrors()
 
+    // Older versions of the app kept a copy of every file it replaced.
+    // It does not any more, so the folder goes.
+    await clearSupersededStore()
+
     // The schedule starts last, so a run that was missed while the app
     // was closed happens after the window is up and can say so.
     await scheduler.start()
@@ -510,29 +506,26 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
   })
 }
 
-/** Delete the superseded copies and report how much was freed. */
-async function pruneSuperseded(dir: string): Promise<{ freedBytes: number }> {
-  let freedBytes = 0
-  const { readdir } = await import('node:fs/promises')
-  async function walk(current: string): Promise<void> {
-    let entries: string[]
-    try {
-      entries = await readdir(current)
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      const abs = join(current, entry)
-      const info = await stat(abs).catch(() => null)
-      if (!info) continue
-      if (info.isDirectory()) {
-        await walk(abs)
-      } else {
-        await rm(abs, { force: true })
-        freedBytes += info.size
-      }
-    }
+/**
+ * Delete the superseded store, which older versions of the app used.
+ *
+ * The app no longer keeps a copy of anything it replaces, so the folder
+ * is dead weight. It is removed once, at start-up, and only if it is
+ * there.
+ */
+async function clearSupersededStore(): Promise<void> {
+  const dir = join(appDataDir(), 'superseded')
+  const info = await stat(dir).catch(() => null)
+  if (!info?.isDirectory()) return
+  try {
+    await rm(dir, { recursive: true, force: true })
+    logger.log({ level: 'info', message: `the old superseded store was removed: ${dir}` })
+  } catch (err) {
+    logger.log({
+      level: 'warn',
+      message: `the old superseded store could not be removed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    })
   }
-  await walk(dir)
-  return { freedBytes }
 }

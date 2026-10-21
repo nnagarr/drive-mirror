@@ -136,9 +136,7 @@ export interface Runner {
    * Forget the mirrors the user removed more than thirty days ago.
    *
    * Their history goes: the file list, the retired records, the counts.
-   * The superseded copies on disk are left alone - they are the only local
-   * copies of the bytes the app replaced, and the user prunes those
-   * themselves.
+   * The files on Drive are not touched.
    */
   pruneRemovedMirrors(): Promise<number>
 
@@ -431,7 +429,6 @@ export function createRunner(deps: RunnerDeps): Runner {
       store: deps.store,
       manifest: mirrorManifest,
       root: config.root,
-      archiveDir: settings.supersededPath,
       onProgress: (event) => {
         deps.emit({
           type: 'progress',

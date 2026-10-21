@@ -15,7 +15,7 @@ and the app never guesses which one it means.
 
 ## What it will not do
 
-- **It never deletes anything from Drive.** A file you delete locally is moved
+- **It never permanently deletes anything from Drive.** A file you delete locally is moved
   to the **Drive Trash**, where Google keeps it for thirty days and then
   removes it for good. If you delete it by accident, it is still in the Drive
   Trash.
@@ -24,8 +24,13 @@ and the app never guesses which one it means.
   *export* of it (`.pdf`, `.csv`, `.png`), which it can always regenerate.
 - **It never writes outside a folder you gave it.** Every run resolves the
   Drive folder first and writes only inside it.
-- **It never loses the version it is replacing.** Before a Drive file is
-  overwritten or trashed, its bytes are copied to the superseded store.
+- **It never keeps a copy of your files.** Nothing is stored locally: a file
+  that changes is replaced on Drive, and a file that is deleted goes to the
+  Drive Trash. The app holds no second copy of anything.
+
+> **Replacing a file is not reversible.** Drive keeps no history for ordinary
+> files, so the version that was on Drive before is gone once the new one
+> goes up. Edit carefully, or keep your own history.
 
 ## Adding a folder
 
@@ -139,8 +144,7 @@ quietly producing a broken mirror.
 | What | Where |
 | --- | --- |
 | Manifest | `%LOCALAPPDATA%\DriveMirror\manifest.json` |
-| Backup of the manifest | `%LOCALAPPDATA%\DriveMirror\backups\` and any extra copy you name |
-| Superseded copies | `%LOCALAPPDATA%\DriveMirror\superseded\` |
+| Backups of the manifest | `%LOCALAPPDATA%\DriveMirror\backups\` and any extra copy you name |
 | Logs | `%LOCALAPPDATA%\DriveMirror\logs\app.log` |
 | Encrypted credentials | `%LOCALAPPDATA%\DriveMirror\credentials.json` |
 
@@ -160,11 +164,11 @@ than one that says so.
 
 - **You deleted it locally.** The Drive copy is in the **Drive Trash** for
   thirty days. Restore it from there in the browser. The app lists it on the
-  card, under **Waiting to be brought back**, and **Download to E:** puts it
-  back on your disk. Nothing is downloaded until you ask for it, and nothing
-  already at that path is ever replaced.
-- **The app overwrote the Drive copy.** The old bytes are in the superseded
-  store, under `%LOCALAPPDATA%\DriveMirror\superseded\`.
+  card, under **Waiting to be brought back**, and **Download to this
+  computer** puts it back on your disk. Nothing is downloaded until you ask
+  for it, and nothing already at that path is ever replaced.
+- **The app overwrote the Drive copy.** The old bytes are gone. Drive keeps
+  no history for ordinary files, and the app keeps no copy of its own.
 - **The drive changed.** The app stops and asks you to approve the new
   volume. Your old files on Drive are untouched.
 

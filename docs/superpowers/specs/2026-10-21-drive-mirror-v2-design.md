@@ -528,6 +528,77 @@ Answer: `MirrorCard` gains `recovered: Array<{ driveFileId: string; path: string
 
 ---
 
+---
+
+## 14. Amendment A2 — the app keeps no copy of anything
+
+**Decided on 2026-10-22, after the v2 work was merged.** The user asked for the
+app to keep nothing locally: a file that changes on the disk simply replaces
+the copy on Drive, and a file that is deleted goes to the Drive trash.
+
+### What changes
+
+The **superseded store** is gone. It was a local copy of every file the app
+replaced or trashed, written before the destructive action so the old bytes
+could be recovered. The four places that wrote it, the `ArchiveFailure`
+mechanism that made the action fail-closed, the `archiveLocalFirst` flag on the
+plan, the `supersededPath` setting, the reveal and prune actions, and the
+`superseded` folder itself are all removed.
+
+### What it costs
+
+**A replacement is not reversible.** Drive keeps no history for ordinary
+files, so the version that was on Drive before is gone once the new one goes
+up. If a local edit was wrong, there is nothing to go back to. The Drive
+*trash* protects deletions for thirty days; it does not protect replacements.
+
+The base spec's rule that the app "must never destroy the only copy of a
+file" is therefore **amended**, not merely its implementation changed: the app
+now destroys the previous version of a file it replaces, on purpose.
+
+### What still holds
+
+- Nothing is ever permanently deleted from Drive. A local deletion goes to
+  the Drive trash, where Google keeps it for thirty days.
+- Nothing is ever written outside a configured mirror's destination.
+- A Google-native file is never uploaded over and never trashed.
+- A failed backup write never fails a sync.
+- The manifest is never destroyed by a connection reset, an account change, or
+  an uninstall.
+
+### The upgrade path
+
+An install that has the old `superseded` folder gets it removed once, at
+start-up, with a line in the log. The copies in it are the only copy of
+those old versions, and they are gone — that was the point of the change, and
+the user asked for it knowingly.
+
+### What was kept deliberately
+
+`src/core/paths.ts` keeps `sanitizePathSegment`, and the manifest's retired
+records keep their hashes. Neither is the superseded store: the first is a
+general utility for writing a name to disk safely, and the second is the
+app's memory of what it has stopped tracking, which the never-prune rule
+still covers.
+
+---
+
+## 15. Amendment A3 — the first install says what it is
+
+**Decided on 2026-10-22.** The defaults were already clean — no mirrors, no
+client id, the schedule off, everything under the app's own data directory —
+but the app did not *say* so. A first-time user saw an empty grid with no
+explanation, and the guide to getting a Google client never appeared on its
+own.
+
+The guide now opens by itself when there is no client, because the app cannot
+do anything without one. The empty screen says what to press. A test
+(`test/freshInstall.test.ts`) pins it: the defaults carry nothing of the
+author's, and no source file names a drive letter or one of the four folders
+the app was first built for.
+
+---
+
 ## 13. Open risk the user was told about
 
 The 30-day pruning (D11) is the one decision that trades a safety property for tidiness. If the user would rather keep every removed mirror's history forever, that is a one-line change in §7.4 and nothing else in this spec depends on it.

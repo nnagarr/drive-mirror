@@ -12,22 +12,18 @@
  * leaves a file on Drive that was about to be trashed, rather than a Drive
  * copy removed before the local side was confirmed.
  *
- * **Fail-closed archiving.** Before a Drive file is overwritten or trashed,
- * its bytes are copied to the superseded store. If that copy cannot be
- * written, the Drive file is left exactly as it was. The archive is the only
- * second copy the app keeps, so continuing past a failed archive would
- * destroy the only version of the file.
+ * **Nothing is kept locally.** A file that changes replaces the copy on
+ * Drive, and a file that is deleted goes to the Drive trash, where Google
+ * keeps it for thirty days. The app keeps no second copy of anything.
  */
 
-import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { copyFile, mkdir, readdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, stat } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
-import { basename, dirname, extname, join } from 'node:path'
-import { pipeline } from 'node:stream/promises'
+import { basename, dirname, join } from 'node:path'
 import type { Readable } from 'node:stream'
 import { applyManifestOp } from './manifest'
-import { baseName, canon, parentPath, sanitizePathSegment } from './paths'
+import { baseName, canon, parentPath } from './paths'
 import type { DriveClient } from '../drive/client'
 import type { ManifestStore } from './manifest'
 import type { ManifestOp, MirrorManifest, Report } from './types'
@@ -74,8 +70,6 @@ export interface ExecutorContext {
   manifest: MirrorManifest
   /** Absolute path of the mirror root on disk. */
   root: string
-  /** Where superseded copies are kept. */
-  archiveDir: string
   onProgress?: (event: ProgressEvent) => void
 }
 
@@ -87,16 +81,12 @@ const PHASES: Array<{ phase: Phase; kinds: SyncAction['kind'][] }> = [
   { phase: 'trashes', kinds: ['trash'] },
 ]
 
-/** Raised when the superseded copy could not be written. */
-class ArchiveFailure extends Error {}
-
 /**
  * Run a plan.
  *
  * The plan is a list of steps; each step is one action plus the manifest
  * writes that follow it. A step that fails is recorded and skipped: one bad
- * file never stops the rest of the mirror. The exception is a failed
- * archive, which skips the step's Drive action as well.
+ * file never stops the rest of the mirror.
  */
 export async function executePlan(
   plan: SyncPlan,
@@ -142,7 +132,7 @@ export async function executePlan(
   return result
 }
 
-/** Run one step: archive if needed, act on Drive, then record it. */
+/** Run one step: act on Drive, then record it. */
 async function runStep(
   step: PlanStep,
   phase: Phase,
@@ -225,9 +215,6 @@ async function runStep(
       }
 
       case 'replace-content': {
-        // The Drive bytes are the ones being replaced, so they are the ones
-        // archived. If the archive fails, the Drive file is not touched.
-        await archiveDriveBytes(ctx.client, action.driveFileId, action.relPath, ctx, mirrorName)
         await ctx.client.updateContent(
           action.driveFileId,
           await localStream(join(ctx.root, action.localPath)),
@@ -251,9 +238,6 @@ async function runStep(
       }
 
       case 'download': {
-        if (action.archiveLocalFirst) {
-          await archiveLocalBytes(ctx.root, action.localPath, ctx, mirrorName)
-        }
         const driveName = await driveNameOf(ctx.client, action.driveFileId, action.relPath)
         const dest = join(
           ctx.root,
@@ -267,9 +251,6 @@ async function runStep(
       }
 
       case 'export-native': {
-        if (action.archiveLocalFirst) {
-          await archiveLocalBytes(ctx.root, action.localPath, ctx, mirrorName)
-        }
         const driveName = await driveNameOf(ctx.client, action.driveFileId, action.relPath)
         const dest = join(
           ctx.root,
@@ -283,22 +264,13 @@ async function runStep(
       }
 
       case 'trash': {
-        // The Drive bytes are archived unconditionally, not only when the
-        // Drive content changed since the last sync: the case worth keeping
-        // is exactly the one that was synced.
-        await archiveDriveBytes(ctx.client, action.driveFileId, action.relPath, ctx, mirrorName)
         await ctx.client.trash(action.driveFileId)
         result.trashed += 1
         break
       }
     }
   } catch (err) {
-    const message =
-      err instanceof ArchiveFailure
-        ? 'the archived copy could not be written; the Drive file was left untouched'
-        : err instanceof Error
-          ? err.message
-          : String(err)
+    const message = err instanceof Error ? err.message : String(err)
     result.errors.push({ relPath: action.relPath, message })
     counter.done += 1
     ctx.onProgress?.({
@@ -417,112 +389,6 @@ function withDriveName(plannedLeaf: string, driveName: string): string {
   if (canonical.length === 0) return plannedLeaf
   if (!plannedLeaf.toLowerCase().startsWith(canonical)) return plannedLeaf
   return driveName + plannedLeaf.slice(canonical.length)
-}
-
-/** Where a superseded copy is kept, and what it is called. */
-function archiveTarget(
-  archiveDir: string,
-  mirrorName: string,
-  relPath: string,
-  md5: string | null,
-): { dir: string; file: string } {
-  const segments = relPath.split('/').filter((s) => s.length > 0).map(sanitizePathSegment)
-  const leaf = segments.pop() ?? 'file'
-  const dir = join(archiveDir, sanitizePathSegment(mirrorName), ...segments, leaf)
-  const stamp = new Date().toISOString().replace(/[-:.]/g, '')
-  const prefix = md5 ? md5.slice(0, 8) : '00000000'
-  const ext = extname(leaf)
-  return { dir, file: join(dir, `${stamp}-${prefix}${ext}`) }
-}
-
-/** Write the sidecar that says what this copy is. */
-async function writeMeta(
-  file: string,
-  originalPath: string,
-  side: 'drive' | 'local',
-  md5: string | null,
-): Promise<void> {
-  await writeFile(
-    `${file}.meta.json`,
-    JSON.stringify({ path: originalPath, side, md5, at: new Date().toISOString() }, null, 2),
-    'utf8',
-  )
-}
-
-/**
- * Copy a Drive file into the superseded store.
- *
- * Throws `ArchiveFailure` when the copy cannot be made. The caller then
- * leaves the Drive file alone.
- */
-async function archiveDriveBytes(
-  client: DriveClient,
-  driveFileId: string,
-  relPath: string,
-  ctx: ExecutorContext,
-  mirrorName: string,
-): Promise<string> {
-  let md5: string | null = null
-  try {
-    const node = await client.getFile(driveFileId)
-    if (!node) {
-      throw new Error(`the Drive file ${driveFileId} could not be read`)
-    }
-    md5 = node.entry.md5Checksum ?? null
-  } catch (err) {
-    throw new ArchiveFailure(
-      err instanceof Error ? err.message : 'the Drive file could not be read',
-    )
-  }
-
-  const { dir, file } = archiveTarget(ctx.archiveDir, mirrorName, relPath, md5)
-  try {
-    await mkdir(dir, { recursive: true })
-    await client.downloadTo(driveFileId, file)
-    await writeMeta(file, relPath, 'drive', md5)
-  } catch (err) {
-    throw new ArchiveFailure(
-      err instanceof Error ? err.message : 'the archived copy could not be written',
-    )
-  }
-  return file
-}
-
-/**
- * Copy a local file into the superseded store.
- *
- * Throws `ArchiveFailure` when the copy cannot be made.
- */
-async function archiveLocalBytes(
-  root: string,
-  localPath: string,
-  ctx: ExecutorContext,
-  mirrorName: string,
-): Promise<string> {
-  const abs = join(root, localPath)
-  const md5 = await md5OfFile(abs)
-  const { dir, file } = archiveTarget(ctx.archiveDir, mirrorName, localPath, md5)
-  try {
-    await mkdir(dir, { recursive: true })
-    await copyFile(abs, file)
-    await writeMeta(file, localPath, 'local', md5)
-  } catch (err) {
-    throw new ArchiveFailure(
-      err instanceof Error ? err.message : 'the archived copy could not be written',
-    )
-  }
-  return file
-}
-
-/** The MD5 of a file, or null when it cannot be read. */
-async function md5OfFile(abs: string): Promise<string | null> {
-  try {
-    const hash = createHash('md5')
-    await pipeline(createReadStream(abs), hash)
-    return hash.digest('hex')
-  } catch {
-    return null
-  }
 }
 
 /**

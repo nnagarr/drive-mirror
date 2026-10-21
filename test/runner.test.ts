@@ -61,7 +61,6 @@ async function harness(
   const settings: Settings = {
     ...defaultSettings(),
     manifestPath: manifestFile,
-    supersededPath: join(dir, 'superseded'),
     // The backup copy stays inside the test's own directory.
     backupPaths: [join(dir, 'backup')],
     // The mirrors are configuration: the settings say what is mirrored.

@@ -248,12 +248,8 @@ export function SettingsDialog({
               <dd>{settings.manifestPath}</dd>
             </div>
             <div>
-              <dt>Backup</dt>
+              <dt>Backups of the manifest</dt>
               <dd>{settings.backupPaths.join(', ')}</dd>
-            </div>
-            <div>
-              <dt>Superseded copies</dt>
-              <dd>{settings.supersededPath}</dd>
             </div>
           </dl>
         </section>

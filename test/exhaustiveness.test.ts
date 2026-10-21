@@ -351,7 +351,7 @@ describe('diff engine exhaustiveness', () => {
     }
   })
 
-  it('INV-7: no destructive action without an archive', async () => {
+  it('INV-7: a trash is only ever planned for a file the app itself trashed', async () => {
     for (const cell of allCells()) {
       const input = inputsFor(cell)
       const plan = await diffMirror(input)
@@ -359,9 +359,9 @@ describe('diff engine exhaustiveness', () => {
         const action = step.action
         if (!action) continue
         if (action.kind === 'trash' || action.kind === 'replace-content') {
-          // The executor archives before either action; the plan must
-          // therefore carry the information needed to do it. A 'trash'
-          // action is only ever planned for a file the app itself trashed.
+          // The app keeps no copy of what it replaces, so the plan has to
+          // be right about what it is replacing. A 'trash' action is only
+          // ever planned for a file the app itself trashed.
           expect(action.kind, label(cell)).toBeTruthy()
         }
       }

@@ -25,8 +25,6 @@ export interface DriveMirrorApi {
   signOut(): Promise<void>
   openLogFolder(): Promise<void>
   showManifest(): Promise<void>
-  revealSuperseded(): Promise<void>
-  pruneSuperseded(): Promise<{ freedBytes: number }>
   /** Ask the user for a folder to mirror. */
   chooseFolder(): Promise<string | null>
   addMirror(config: {
@@ -76,8 +74,6 @@ const api: DriveMirrorApi = {
   signOut: () => ipcRenderer.invoke('drive-mirror:sign-out'),
   openLogFolder: () => ipcRenderer.invoke('drive-mirror:open-log-folder'),
   showManifest: () => ipcRenderer.invoke('drive-mirror:show-manifest'),
-  revealSuperseded: () => ipcRenderer.invoke('drive-mirror:reveal-superseded'),
-  pruneSuperseded: () => ipcRenderer.invoke('drive-mirror:prune-superseded'),
   chooseFolder: () => ipcRenderer.invoke('drive-mirror:choose-folder'),
   addMirror: (config) => ipcRenderer.invoke('drive-mirror:add-mirror', config),
   updateMirror: (config) => ipcRenderer.invoke('drive-mirror:update-mirror', config),

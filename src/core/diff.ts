@@ -3,7 +3,7 @@
  * manifest) into a plan of actions.
  *
  * The engine is pure with respect to the outside world. Every read it needs
- * â€” a file's hash, a Drive file's current state, a native export's bytes â€”
+ * Ã¢â‚¬â€ a file's hash, a Drive file's current state, a native export's bytes Ã¢â‚¬â€
  * arrives through the injected `DiffIo` port, so the whole engine is testable
  * without a disk or a network.
  *
@@ -64,9 +64,6 @@ export type SyncAction =  | { kind: 'create-folder'; relPath: string }
       localPath: string
       driveFileId: string
       size: number
-      /** The local copy has changes that the download would overwrite:
-       *  archive it first. */
-      archiveLocalFirst?: boolean
     }
   | {
       kind: 'export-native'
@@ -75,8 +72,6 @@ export type SyncAction =  | { kind: 'create-folder'; relPath: string }
       driveFileId: string
       exportMime: string
       size: number
-      /** The local copy differs from the fresh export: archive it first. */
-      archiveLocalFirst?: boolean
     }
   | { kind: 'trash'; relPath: string; driveFileId: string }
   | { kind: 'untrash'; relPath: string; driveFileId: string }
@@ -371,7 +366,7 @@ export async function diffMirror(input: DiffInput): Promise<SyncPlan> {
 }
 
 /**
- * Group B â€” the path has a live manifest entry.
+ * Group B Ã¢â‚¬â€ the path has a live manifest entry.
  *
  * This group contains the app's only trash action (B0). Everything else here
  * moves content around or records that nothing needs doing.
@@ -469,8 +464,6 @@ async function groupB(
               localPath: manifestEntry.localPath,
               driveFileId: driveFile.id,
               size: driveFile.size ?? 0,
-              // The local file has changes the download would overwrite.
-              archiveLocalFirst: true,
             },
             ops: [
               {
@@ -838,7 +831,7 @@ function compareContent(
 }
 
 /**
- * Group D â€” a retired record at this path, with no Drive file present.
+ * Group D Ã¢â‚¬â€ a retired record at this path, with no Drive file present.
  *
  * This is the group that handles the user re-creating a file they had
  * deleted: the Drive copy is either still in Trash (restore it) or gone
@@ -854,7 +847,7 @@ async function groupD(
   const { io, mergeOnly } = input
   const localPresent = localEntry?.state === 'present'
 
-  // D5 â€” nothing local. The retired record stays as it is.
+  // D5 Ã¢â‚¬â€ nothing local. The retired record stays as it is.
   if (!localPresent) return null
 
   const localMd5 = await io.md5Of(path)
@@ -892,7 +885,7 @@ async function groupD(
     },
   })
 
-  // D2 â€” somebody else trashed it. The app must not undo that, and must
+  // D2 Ã¢â‚¬â€ somebody else trashed it. The app must not undo that, and must
   // not re-upload over it either: the user's deletion stands.
   if (record.state === 'trashed-externally') {
     return {
@@ -909,12 +902,12 @@ async function groupD(
     }
   }
 
-  // D3 / D4 â€” the Drive file is gone for good. Upload the local one.
+  // D3 / D4 Ã¢â‚¬â€ the Drive file is gone for good. Upload the local one.
   if (record.state === 'gone' || record.state === 'purged' || record.state === 'rebased') {
     return uploadNew(record.state === 'purged' ? 'purged' : 'gone', recordId)
   }
 
-  // D1 â€” the Drive copy is still in Trash. The user has re-created the file
+  // D1 Ã¢â‚¬â€ the Drive copy is still in Trash. The user has re-created the file
   // locally, so restore the Drive copy and give it the new content.
   if (record.state === 'trashed') {
     // A rebase must not perform destructive actions; restoring a file from
@@ -1036,7 +1029,7 @@ async function groupD(
 }
 
 /**
- * Group R â€” the Drive file is a known, retired id.
+ * Group R Ã¢â‚¬â€ the Drive file is a known, retired id.
  *
  * This is the group that decides whether a file the user deleted comes back.
  * The answer is usually no: the user deleting a file locally and the app
@@ -1070,7 +1063,7 @@ async function groupR(
   // --- R1: the user deleted it locally, and it is back --------------
   if (record.state === 'trashed' || record.state === 'trashed-externally') {
     if (localAbsent) {
-      // The file is on Drive and not on disk. The user restored it â€” or
+      // The file is on Drive and not on disk. The user restored it Ã¢â‚¬â€ or
       // somebody else did. Either way the app does not re-download it: the
       // user's deletion stands until they say otherwise.
       return {
@@ -1207,7 +1200,6 @@ async function groupR(
             localPath: path,
             driveFileId: driveFile.id,
             size: driveFile.size ?? 0,
-            archiveLocalFirst: true,
           },
           ops: [
             {
@@ -1318,9 +1310,6 @@ async function groupR(
             localPath: path,
             driveFileId: driveFile.id,
             size: driveFile.size ?? 0,
-            // The local file differs from the rebase baseline, so it holds
-            // work the download would overwrite.
-            archiveLocalFirst: true,
           },
           ops: [
             {
@@ -1390,7 +1379,7 @@ async function groupR(
 }
 
 /**
- * Group N â€” Google-native files.
+ * Group N Ã¢â‚¬â€ Google-native files.
  *
  * A Google-native file is never uploaded over and never trashed. Its local
  * counterpart is a *derived artifact*: an export that the app can recreate
@@ -1410,7 +1399,7 @@ async function groupN(
 ): Promise<GroupResult | null> {
   const { io } = input
 
-  // N11 â€” a native type with no export. There is nothing to back up.
+  // N11 Ã¢â‚¬â€ a native type with no export. There is nothing to back up.
   if (driveFile) {
     const info = exportInfoFor(driveFile.mimeType)
     if (!info) {
@@ -1440,7 +1429,6 @@ async function groupN(
   /** Export the native file to its local path. */
   const exportTo = (
     localPath: string,
-    archiveLocalFirst: boolean,
     driveFileId: string,
   ): GroupResult => ({
     step: {
@@ -1451,7 +1439,6 @@ async function groupN(
         driveFileId,
         exportMime,
         size: 0,
-        archiveLocalFirst,
       },
       ops: [
         {
@@ -1495,9 +1482,9 @@ async function groupN(
     // already: adopt it without writing anything.
     const existing = await io.readLocalBytes(plannedPath)
     if (existing && existing.equals(bytes)) {
-      return exportTo(plannedPath, false, driveFile.id)
+      return exportTo(plannedPath, driveFile.id)
     }
-    return exportTo(plannedPath, false, driveFile.id)
+    return exportTo(plannedPath, driveFile.id)
   }
 
   // --- N5: a different native file now occupies the path -----------
@@ -1509,7 +1496,7 @@ async function groupN(
         : probe.status === 'trashed'
           ? 'trashed-externally'
           : 'moved'
-    const result = exportTo(plannedPath, false, driveFile.id)
+    const result = exportTo(plannedPath, driveFile.id)
     const retired: ManifestOp = {
       op: 'set-retired',
       id: manifestEntry.driveFileId,
@@ -1552,10 +1539,8 @@ async function groupN(
           },
         }
       }
-      // The user may have edited the exported copy. Archive it before it is
-      // overwritten.
-      const edited = exportPresent ? !exportPresent.equals(bytes) : false
-      return exportTo(manifestEntry.localPath, edited, driveFile.id)
+      // The user may have edited the exported copy. It is replaced.
+      return exportTo(manifestEntry.localPath, driveFile.id)
     }
 
     if (!exportPresent) {
@@ -1575,7 +1560,7 @@ async function groupN(
           },
         }
       }
-      return exportTo(manifestEntry.localPath, false, driveFile.id)
+      return exportTo(manifestEntry.localPath, driveFile.id)
     }
 
     // The document is unchanged and the export exists. If the bytes on disk
@@ -1596,7 +1581,7 @@ async function groupN(
       }
     }
 
-    // N4 â€” unchanged document, but the export on disk differs from what a
+    // N4 Ã¢â‚¬â€ unchanged document, but the export on disk differs from what a
     // fresh export would produce: the user edited it. Leave it alone and
     // say so rather than overwriting their work.
     return {
@@ -1681,7 +1666,7 @@ async function groupN(
     }
 
     if (probe.status === 'trashed') {
-      // N7 â€” somebody else trashed it. Never restore it, never re-upload.
+      // N7 Ã¢â‚¬â€ somebody else trashed it. Never restore it, never re-upload.
       return {
         step: {
           action: null,
@@ -1713,7 +1698,7 @@ async function groupN(
     }
 
     if (probe.currentPath === path) {
-      // N8 â€” the listing simply missed it. Re-adopt it.
+      // N8 Ã¢â‚¬â€ the listing simply missed it. Re-adopt it.
       return {
         step: {
           action: null,
@@ -1728,7 +1713,7 @@ async function groupN(
       }
     }
 
-    // N9 â€” it was moved on Drive. Retire it here; it is picked up at its
+    // N9 Ã¢â‚¬â€ it was moved on Drive. Retire it here; it is picked up at its
     // new path as a first sight.
     return {
       step: {
@@ -1766,7 +1751,7 @@ interface GroupResult {
 }
 
 /**
- * Group C â€” a Drive file the app has never tracked.
+ * Group C Ã¢â‚¬â€ a Drive file the app has never tracked.
  */
 async function groupC(
   input: DiffInput,
@@ -1776,7 +1761,7 @@ async function groupC(
 ): Promise<GroupResult | null> {
   const { io } = input
 
-  // C1 â€” the file exists only on Drive. Download it; the Drive copy stays.
+  // C1 Ã¢â‚¬â€ the file exists only on Drive. Download it; the Drive copy stays.
   if (!localEntry || localEntry.state === 'absent') {
     const entry = liveEntryFor(path, driveFile, path, null, 0, 0)
     return {
@@ -1798,7 +1783,7 @@ async function groupC(
   const driveMd5 = driveFile.md5 ?? null
 
   if (localMd5 !== null && driveMd5 !== null && localMd5 === driveMd5) {
-    // C2 â€” identical. Record it; transfer nothing.
+    // C2 Ã¢â‚¬â€ identical. Record it; transfer nothing.
     const entry = liveEntryFor(path, driveFile, path, localMd5, localEntry.size ?? 0, localEntry.mtimeMs ?? 0)
     return {
       step: {
@@ -1821,7 +1806,7 @@ async function groupC(
     }
   }
 
-  // C3 â€” the content differs. The local side wins.
+  // C3 Ã¢â‚¬â€ the content differs. The local side wins.
   const md5 = localMd5 ?? ''
   const size = localEntry.size ?? 0
   const entry = liveEntryFor(path, driveFile, path, md5, size, localEntry.mtimeMs ?? 0)
@@ -1841,7 +1826,7 @@ async function groupC(
 }
 
 /**
- * Group E â€” a local file the app has never tracked.
+ * Group E Ã¢â‚¬â€ a local file the app has never tracked.
  */
 async function groupE(
   input: DiffInput,

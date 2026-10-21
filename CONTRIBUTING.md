@@ -36,6 +36,16 @@ overwrites or removes something archives the bytes being replaced first, and
 if that archive cannot be written the destructive action is skipped, not
 continued. When you add a rule, keep that promise.
 
+> **Amended, 2026-10-22.** The app no longer archives. A file that changes
+> replaces the copy on Drive, and a file that is deleted goes to the Drive
+> trash, where Google keeps it for thirty days. Nothing is stored locally.
+>
+> The rule that remains: **the app must never permanently delete anything
+> from Drive, and it must never write outside a folder the user gave it.**
+> The Drive trash is the safety net for deletions. There is no safety net for
+> a replacement, and that is a decision, not an oversight — see the v2
+> design, section 8, amendment A2.
+
 ## The rules the code holds to
 
 These are the ones a change can break without any test going red, so they are

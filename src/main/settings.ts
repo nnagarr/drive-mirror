@@ -65,8 +65,6 @@ export interface Settings {
   manifestPath: string
   /** Where copies of the manifest are kept. The first is the local one. */
   backupPaths: string[]
-  /** Where superseded copies are kept. */
-  supersededPath: string
   /** The smallest folder size the count-drop guard applies to. */
   guardThreshold: number
   /** The mirrors the user has configured. */
@@ -108,7 +106,6 @@ export function defaultSettings(): Settings {
     clientSecretSet: false,
     manifestPath: join(dir, 'manifest.json'),
     backupPaths: [join(dir, 'backups')],
-    supersededPath: join(dir, 'superseded'),
     guardThreshold: 5,
     mirrors: [],
     schedule: {
@@ -260,7 +257,6 @@ function withDefaults(defaults: Settings, parsed: unknown): Settings {
     clientSecretSet: mergeValue(defaults.clientSecretSet, parsed.clientSecretSet),
     manifestPath: mergeValue(defaults.manifestPath, parsed.manifestPath),
     backupPaths: mergeValue(defaults.backupPaths, parsed.backupPaths),
-    supersededPath: mergeValue(defaults.supersededPath, parsed.supersededPath),
     guardThreshold: mergeValue(defaults.guardThreshold, parsed.guardThreshold),
     mirrors: mergeValue(defaults.mirrors, parsed.mirrors),
     schedule: mergeValue(defaults.schedule, parsed.schedule),

@@ -4,6 +4,17 @@
 **Status:** Draft for approval (rev 10)
 **One-line:** A native-feeling Windows 11 desktop app that mirrors four folders on `E:` up to `My Drive/` on Google Drive, with a persistent checksum manifest and multiple anti-catastrophe guards.
 
+> **Amended, 2026-10-22.** Two things in this document no longer hold. The
+> app mirrors **whatever folders the user chooses**, not four fixed ones — see
+> the v2 design. And the app **keeps no copy of anything**: every
+> "archive the bytes first" instruction below is superseded, the superseded
+> store is gone, and a replacement is no longer reversible. Both are set out
+> in `2026-10-21-drive-mirror-v2-design.md`, section 14, amendment A2.
+>
+> The rules themselves — which file wins, when a file is trashed, what the
+> manifest records — are unchanged. Only the archiving step in front of the
+> destructive actions is gone.
+
 ---
 
 ## 1. Intent and the why

@@ -84,8 +84,6 @@ export interface IpcDeps {
   signOut(): Promise<void>
   openLogFolder(): Promise<void>
   showManifest(): Promise<void>
-  revealSuperseded(): Promise<void>
-  pruneSuperseded(): Promise<{ freedBytes: number }>
   /** The app's icon, as a data the interface can show. */
   appIcon(): Promise<string>
   /** Ask the user for a folder to mirror. */
@@ -172,10 +170,6 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle('drive-mirror:open-log-folder', () => deps.openLogFolder())
 
   ipcMain.handle('drive-mirror:show-manifest', () => deps.showManifest())
-
-  ipcMain.handle('drive-mirror:reveal-superseded', () => deps.revealSuperseded())
-
-  ipcMain.handle('drive-mirror:prune-superseded', () => deps.pruneSuperseded())
 
   ipcMain.handle('drive-mirror:choose-folder', async () => deps.chooseFolder())
 
