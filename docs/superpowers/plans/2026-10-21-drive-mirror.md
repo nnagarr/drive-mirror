@@ -4,11 +4,11 @@
 
 **Goal:** A packaged Windows 11 desktop app that mirrors `E:\Medicine`, `E:\graphicDesign`, `E:\videoEditing`, and `E:\whoami` up to the matching folders in the user's Google Drive `My Drive`, using a persistent checksum manifest and four anti-catastrophe guards.
 
-**Architecture:** The sync engine lives in `src/core/` as framework-free TypeScript that imports neither `electron` nor `node:fs` nor `node:https`. It consumes two injected ports — a scanned local tree and a `DriveClient` interface — and produces a `SyncPlan` of actions plus manifest operations. The executor in `src/core/sync.ts` applies the plan against a real Drive client, writing the manifest through an atomic store with a write-ahead journal. The Electron main process owns credentials (DPAPI via `safeStorage`), wires the ports, and streams progress to a React renderer over a typed IPC bridge.
+**Architecture:** The sync engine lives in `src/core/` as framework-free TypeScript that imports neither `electron` nor `node:fs` nor `node:https`. It consumes two injected ports â€” a scanned local tree and a `DriveClient` interface â€” and produces a `SyncPlan` of actions plus manifest operations. The executor in `src/core/sync.ts` applies the plan against a real Drive client, writing the manifest through an atomic store with a write-ahead journal. The Electron main process owns credentials (DPAPI via `safeStorage`), wires the ports, and streams progress to a React renderer over a typed IPC bridge.
 
-**Tech Stack:** Electron 44.9.x, React 19.3.x, TypeScript 5.9.x, Vite 8.3.x, electron-vite 6.0.x, electron-builder 26.15.x, Vitest 5.0.x, `google-auth-library` 11.3.x. No `googleapis` bundle — Drive REST is called directly over `fetch`.
+**Tech Stack:** Electron 44.9.x, React 19.3.x, TypeScript 5.9.x, Vite 8.3.x, electron-vite 6.0.x, electron-builder 26.15.x, Vitest 5.0.x, `google-auth-library` 11.3.x. No `googleapis` bundle â€” Drive REST is called directly over `fetch`.
 
-**Spec:** `docs/superpowers/specs/2026-10-21-drive-mirror-design.md` (rev 10). The plan argues from the spec; executors read both. §6.3 of the spec is the **normative** rule table — this plan restates it as tasks but never contradicts it.
+**Spec:** `docs/superpowers/specs/2026-10-21-drive-mirror-design.md` (rev 10). The plan argues from the spec; executors read both. Â§6.3 of the spec is the **normative** rule table â€” this plan restates it as tasks but never contradicts it.
 
 ---
 
@@ -23,7 +23,7 @@ These apply to every task. If a task's steps seem to conflict with one of these 
 - `npm test` runs `vitest run`. `npm run typecheck` runs `tsc --noEmit`. `npm run build` runs `electron-vite build`. `npm run dist` runs `electron-builder --win`.
 - Tests live in `test/` and match `test/**/*.test.ts`. Vitest `environment: 'node'`, `include: ['test/**/*.test.ts']`.
 
-**The four mirrors — exactly these, no more, no fewer**
+**The four mirrors â€” exactly these, no more, no fewer**
 
 | Local root | Drive destination |
 |---|---|
@@ -45,7 +45,7 @@ These apply to every task. If a task's steps seem to conflict with one of these 
 9. **Drive writes are confined to the four resolved mirror roots** and their descendants.
 10. **Google-native Drive files are never uploaded over and never trashed.** Their local counterpart is a regenerable export.
 
-**Approved decisions (from the spec's §13, accepted by approving the spec)**
+**Approved decisions (from the spec's Â§13, accepted by approving the spec)**
 
 - App name: **Drive Mirror**. Window title, installer name, and `%LOCALAPPDATA%\DriveMirror` folder all use it.
 - Manifest live backup: **`E:\.drive-mirror-backup\`**. It sits outside the four mirrored roots, so it is never itself synced.
@@ -54,7 +54,7 @@ These apply to every task. If a task's steps seem to conflict with one of these 
 - Restore from Drive Trash: the app **does not** re-download it. It leaves the file on Drive, reports it once, and offers a **"Download to `E:`"** button.
 - Guard threshold: **5 files** (a setting). Below 5, only a complete wipe of a directory trips the guard.
 - Google-native export path collision: the export goes to **`Budget (export 1).csv`**, then `Budget (export 2).csv`, and so on. The manifest records the chosen path.
-- A local file whose name exactly matches a Google-native Drive file's path: **reported every run and left untracked** — it is not uploaded and the Drive name is not changed.
+- A local file whose name exactly matches a Google-native Drive file's path: **reported every run and left untracked** â€” it is not uploaded and the Drive name is not changed.
 - Google-native types with no export (forms, scripts, sites): **left completely alone on Drive and reported every run.**
 
 **Credentials**
@@ -73,12 +73,12 @@ The five input classes most likely to bite a real user of this software. Each li
 | # | Input / condition | Expected behaviour | Pinned by |
 |---|---|---|---|
 | 1 | A file the app trashed on Drive is still listed by the API (Drive returns trashed files by default) | It must not come back into the mirror, and must not be re-downloaded. The listing filter is `trashed = false`, parenthesised, on **every** query | Task 4 (`listing.test.ts`), Task 11 (`exhaustiveness.test.ts`) |
-| 2 | A local file cannot be read — access denied, path too long, a junction in its place | The app must treat it as `unknown`, not as deleted, and must not trash its Drive copy | Task 3 (`localScan.test.ts`), Task 7 (`diff.test.ts`) |
+| 2 | A local file cannot be read â€” access denied, path too long, a junction in its place | The app must treat it as `unknown`, not as deleted, and must not trash its Drive copy | Task 3 (`localScan.test.ts`), Task 7 (`diff.test.ts`) |
 | 3 | The user restores a file from Drive Trash | The file must not silently re-download into `E:`. It is reported once and left alone | Task 9 (`diff.test.ts`), Task 11 |
 | 4 | `E:` is reassigned to a different physical volume (drive letter change, disk swap) | The app must refuse to sync and must not trash the Drive mirror. The volume serial is the fingerprint | Task 12 (`guards.test.ts`) |
 | 5 | A file the user created on `E:` that has never been synced | It must reach Drive. A mirror that silently skips local files is not a mirror | Task 6 (`diff.test.ts`), Task 11 (INV-2) |
 
-Two further conditions that are not in the five but must not be forgotten: a file that Drive cannot checksum (zero-byte files, some binary types) must not be treated as "content differs" and must not trigger an archive on every run (§6.5); and a 292 MB file must upload through a resumable session whose final chunk can return an empty body with a null status, which must not be retried into a duplicate file (§9.5).
+Two further conditions that are not in the five but must not be forgotten: a file that Drive cannot checksum (zero-byte files, some binary types) must not be treated as "content differs" and must not trigger an archive on every run (Â§6.5); and a 292 MB file must upload through a resumable session whose final chunk can return an empty body with a null status, which must not be retried into a duplicate file (Â§9.5).
 
 ---
 
@@ -94,11 +94,11 @@ Two further conditions that are not in the five but must not be forgotten: a fil
 | `src/core/localScan.ts` | Walk a local root into a `LocalTree` with present/absent/unknown states; recursive per-directory file counts. |
 | `src/core/driveTree.ts` | Assemble Drive listing nodes into a `DriveTree`; build the `trashed = false` listing query; detect ambiguity and unrepresentable names. |
 | `src/core/claims.ts` | Claim index (`claimedBy`, `retiredClaims`) and the Pass-A export-path planner. |
-| `src/core/diff.ts` | The normative dispatch: steps P1–P10 and rule groups R, N, B, C, D, E. Produces a `SyncPlan`. |
+| `src/core/diff.ts` | The normative dispatch: steps P1â€“P10 and rule groups R, N, B, C, D, E. Produces a `SyncPlan`. |
 | `src/core/guards.ts` | Count-drop guard, volume-fingerprint guard, rebase conversion. |
 | `src/core/sync.ts` | Plan executor: phase ordering, fail-closed archiving, error isolation, write-ahead intents, journal application. |
 | `src/core/logger.ts` | Structured event log with per-run file output. |
-| `src/drive/client.ts` | The `DriveClient` port interface — the only surface `core` is allowed to know about Drive. |
+| `src/drive/client.ts` | The `DriveClient` port interface â€” the only surface `core` is allowed to know about Drive. |
 | `src/drive/httpClient.ts` | REST implementation of `DriveClient`: list, get, create, update, trash, untrash, download, export. |
 | `src/drive/resumable.ts` | Resumable upload sessions, chunking, null-status recovery by md5+size lookup. |
 | `src/drive/oauth.ts` | Loopback OAuth flow, token exchange, refresh, and the `files.list` query string escaping. |
@@ -147,7 +147,7 @@ describe('canon', () => {
     expect(canon('Renders/Final/Scene.PSD')).toBe('renders/final/scene.psd')
   })
   it('normalizes to NFC', () => {
-    expect(canon('café/x.psd')).toBe(canon('café/x.psd'))
+    expect(canon('cafÃ©/x.psd')).toBe(canon('cafÃ©/x.psd'))
   })
   it('treats a and A as the same key', () => {
     expect(canon('A.psd')).toBe(canon('a.psd'))
@@ -219,11 +219,11 @@ describe('sanitizePathSegment', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/paths.test.ts`
-Expected: FAIL — `Cannot find module '../src/core/paths'`.
+Expected: FAIL â€” `Cannot find module '../src/core/paths'`.
 
 - [ ] **Step 3: Write the scaffold and the implementation**
 
-`package.json` — scripts exactly:
+`package.json` â€” scripts exactly:
 
 ```json
 {
@@ -262,7 +262,7 @@ Expected: FAIL — `Cannot find module '../src/core/paths'`.
 
 `react` and `react-dom` are runtime dependencies of the renderer but electron-vite bundles the renderer, so listing them under `devDependencies` is fine for an app that bundles its renderer. `google-auth-library` is used by the main process at runtime and is externalized by `externalizeDepsPlugin`, so it must be a real `dependency`.
 
-`.gitignore` — ignore `node_modules/`, `out/`, `dist/`, `*.log`, and critically:
+`.gitignore` â€” ignore `node_modules/`, `out/`, `dist/`, `*.log`, and critically:
 
 ```
 # Never commit OAuth credentials
@@ -272,7 +272,7 @@ client_secret*.json
 .env.*
 ```
 
-`tsconfig.json` — references the two project configs so `tsc --noEmit` covers main/preload/core and renderer separately:
+`tsconfig.json` â€” references the two project configs so `tsc --noEmit` covers main/preload/core and renderer separately:
 
 ```json
 {
@@ -324,7 +324,7 @@ export default defineConfig({
 })
 ```
 
-`src/core/paths.ts` — implement `canon` exactly as `p.replace(/\\/g, '/').normalize('NFC').toLowerCase()`; `isWindowsReservedName` matching `/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i` against the base name; `isRepresentableOnWindows` rejecting `[:*?"<>|]`, a trailing dot or space, and reserved names; `sanitizePathSegment` replacing `[:*?"<>|\x00-\x1f]` with `_`.
+`src/core/paths.ts` â€” implement `canon` exactly as `p.replace(/\\/g, '/').normalize('NFC').toLowerCase()`; `isWindowsReservedName` matching `/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i` against the base name; `isRepresentableOnWindows` rejecting `[:*?"<>|]`, a trailing dot or space, and reserved names; `sanitizePathSegment` replacing `[:*?"<>|\x00-\x1f]` with `_`.
 
 - [ ] **Step 4: Run typecheck and tests to verify they pass**
 
@@ -395,7 +395,7 @@ it('builds retiredById keyed by drive file id', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/manifest.test.ts`
-Expected: FAIL — `Cannot find module '../src/core/manifest'`.
+Expected: FAIL â€” `Cannot find module '../src/core/manifest'`.
 
 - [ ] **Step 3: Implement `src/core/types.ts`**
 
@@ -541,8 +541,8 @@ Implementation requirements, each of which a test asserts:
 - `appendJournal(op)` appends one JSON line to `<dir>/journal.ndjson` and `fsync`s the file descriptor before returning.
 - `readJournal()` parses each line as a `JournalOp`, skipping lines that fail to parse.
 - `replayJournal(base)` returns a manifest with every non-`intent` op applied in order via `applyManifestOp`.
-- `applyManifestOp(m, op)` implements the four ops. `set-retired` **replaces** the record but preserves the existing `at` only when the state is unchanged; a **state change** sets `at` to `new Date().toISOString()`. `set-retired` never deletes an existing record for the same id — it overwrites in place.
-- `buildIndexes(m)` returns `retiredByPath` (canonical path → records sorted newest-first by `at`) and `retiredById` (id → record). Both are built fresh from `m.retired` on every call.
+- `applyManifestOp(m, op)` implements the four ops. `set-retired` **replaces** the record but preserves the existing `at` only when the state is unchanged; a **state change** sets `at` to `new Date().toISOString()`. `set-retired` never deletes an existing record for the same id â€” it overwrites in place.
+- `buildIndexes(m)` returns `retiredByPath` (canonical path â†’ records sorted newest-first by `at`) and `retiredById` (id â†’ record). Both are built fresh from `m.retired` on every call.
 - `emptyMirror(root)` returns a mirror with empty `files`, `retired`, `dirs`, `lastCounts`, and `rebase: null`.
 
 - [ ] **Step 5: Run typecheck and tests**
@@ -615,7 +615,7 @@ it('reports the root count as the total file count', async () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/localScan.test.ts`
-Expected: FAIL — `Cannot find module '../src/core/localScan'`.
+Expected: FAIL â€” `Cannot find module '../src/core/localScan'`.
 
 - [ ] **Step 3: Implement `src/core/localScan.ts`**
 
@@ -630,7 +630,7 @@ export async function scanLocal(opts: ScanOptions): Promise<LocalTree>
 Implementation requirements:
 
 - Walk `root` recursively with `fs.promises.readdir(dir, { withFileTypes: true })`.
-- For each entry use `lstat` semantics: if `entry.isSymbolicLink()`, **skip it entirely** — do not follow it, do not record it as a file. Record the skipped symlink's path in a `skipped` note on the tree's `unreadableDirs` map only if the scanner has no better place for it; the simplest conforming behaviour is to skip silently, since the spec only requires that symlinks are never followed.
+- For each entry use `lstat` semantics: if `entry.isSymbolicLink()`, **skip it entirely** â€” do not follow it, do not record it as a file. Record the skipped symlink's path in a `skipped` note on the tree's `unreadableDirs` map only if the scanner has no better place for it; the simplest conforming behaviour is to skip silently, since the spec only requires that symlinks are never followed.
 - A file that cannot be read (`EACCES`, `EPERM`, `ENOENT` mid-walk, path too long) is recorded as `state: 'unknown'`.
 - A directory that cannot be read (`readdir` rejects) is recorded in `unreadableDirs` with the error message, and **every `knownPaths` entry under that directory** is recorded in `files` with `state: 'unknown'`.
 - Every `knownPaths` entry that is not found on disk and not under an unreadable directory is recorded with `state: 'absent'`. This is how a deleted file becomes visible to the diff.
@@ -663,7 +663,7 @@ git commit -m "feat(core): three-state local scanner with recursive counts"
 
 - [ ] **Step 1: Write the failing test**
 
-`test/listing.test.ts` — the query-builder tests, which pin the exact wire format:
+`test/listing.test.ts` â€” the query-builder tests, which pin the exact wire format:
 
 ```ts
 it('always filters trashed files', () => {
@@ -715,7 +715,7 @@ it('resolves a node path from its parent path and name', () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npm test -- test/driveTree.test.ts test/listing.test.ts`
-Expected: FAIL — `Cannot find module '../src/core/driveTree'`.
+Expected: FAIL â€” `Cannot find module '../src/core/driveTree'`.
 
 - [ ] **Step 3: Implement `src/core/driveTree.ts`**
 
@@ -725,11 +725,11 @@ Expected: FAIL — `Cannot find module '../src/core/driveTree'`.
 trashed = false and ('id1' in parents or 'id2' in parents)
 ```
 
-with each id single-quoted. It throws on an empty array — an unfiltered whole-drive listing is never acceptable.
+with each id single-quoted. It throws on an empty array â€” an unfiltered whole-drive listing is never acceptable.
 
 `buildDriveTree(nodes)` assembles the tree:
 
-- Each node's canonical path is `joinPath(parentPath, name)` — but folders are recorded in `dirs`/`dirById`, not `files`.
+- Each node's canonical path is `joinPath(parentPath, name)` â€” but folders are recorded in `dirs`/`dirById`, not `files`.
 - A node whose mimeType is `application/vnd.google-apps.folder` becomes a directory: `dirs.set(canonPath, node.entry.id)` and `dirById.set(node.entry.id, canonPath)`.
 - Other nodes become file entries in `files.get(canonPath)`, pushed as an array so multiple files can share a path.
 - After grouping, **every** entry at a key with more than one member gets `ambiguous = true`.
@@ -821,7 +821,7 @@ it('claims the export path of a retired native file', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/claims.test.ts`
-Expected: FAIL — `Cannot find module '../src/core/claims'`.
+Expected: FAIL â€” `Cannot find module '../src/core/claims'`.
 
 - [ ] **Step 3: Implement `src/core/claims.ts`**
 
@@ -829,7 +829,7 @@ Expected: FAIL — `Cannot find module '../src/core/claims'`.
 
 1. the manifest entry's recorded `localPath`, if the manifest already tracks this Drive file id;
 2. `joinPath(path, ext)` where `ext` is the export extension for the mime type;
-3. `joinPath(path, '(export N).ext)` for `N = 1, 2, 3, …`.
+3. `joinPath(path, '(export N).ext)` for `N = 1, 2, 3, â€¦`.
 
 A candidate is **taken** if it collides with another Drive file path, another manifest entry's `localPath`, another planned export path, or a local file present in the local tree. The first candidate whose recorded `localPath` belongs to this Drive file id wins immediately; otherwise the first untaken candidate wins. If every candidate is taken, use the first candidate and record a conflict.
 
@@ -921,7 +921,7 @@ export async function diffMirror(input: DiffInput): Promise<SyncPlan>
 
 - [ ] **Step 1: Write the failing test**
 
-`test/diff.test.ts` — build a `DiffInput` from `test/helpers/fixtures.ts` and assert:
+`test/diff.test.ts` â€” build a `DiffInput` from `test/helpers/fixtures.ts` and assert:
 
 ```ts
 it('downloads a Drive-only file (C1)', async () => {
@@ -974,7 +974,7 @@ it('skips an unreadable local path entirely', async () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/diff.test.ts`
-Expected: FAIL — `Cannot find module '../src/core/diff'`.
+Expected: FAIL â€” `Cannot find module '../src/core/diff'`.
 
 - [ ] **Step 3: Create `test/helpers/fixtures.ts`**
 
@@ -991,7 +991,7 @@ export function diffIo(overrides?: Partial<DiffIo>, local?: LocalTree): DiffIo
 
 - [ ] **Step 4: Implement the dispatch skeleton and groups C and E**
 
-`src/core/diff.ts` must implement the **normative** dispatch from spec §6.3, in this exact order:
+`src/core/diff.ts` must implement the **normative** dispatch from spec Â§6.3, in this exact order:
 
 ```
 P1  Drive key unusable (ambiguous or unrepresentable)  -> skip, report
@@ -1006,19 +1006,19 @@ P9  no manifest entry, no Drive file, retired records  -> Group D
 P10 no manifest entry, no Drive file, no retired       -> Group E
 ```
 
-Steps P1–P3 and P8–P10 are implemented in this task. **P4, P5, P6, P7, P9 are declared but their rule groups are added in Tasks 7–10.** To keep the dispatch total from the start, implement the step order with a `notImplemented(step)` throw that names the step, and have the tests for this task only exercise P1–P3, P8, and P10.
+Steps P1â€“P3 and P8â€“P10 are implemented in this task. **P4, P5, P6, P7, P9 are declared but their rule groups are added in Tasks 7â€“10.** To keep the dispatch total from the start, implement the step order with a `notImplemented(step)` throw that names the step, and have the tests for this task only exercise P1â€“P3, P8, and P10.
 
-Group C (spec §6.3):
+Group C (spec Â§6.3):
 
-- **C1** — `L(P)` is `absent`: **download** it into `E:`, keep the Drive copy. Action `download` with `relPath` and `localPath` both `P`, `driveFileId` the Drive id, `size` the Drive size. Ops: `set-file` for `P` with the LiveEntry built from the Drive metadata and the local path.
-- **C2** — `L(P)` is `present` and the Drive `md5` equals the local `md5`: **no transfer**. The step's `action` is `null`; ops carry `set-file` for `P`.
-- **C3** — `L(P)` is `present` and the content differs: **local wins**. Action `replace-content` with `driveFileId` the Drive id and the local `md5` and `size`. Ops: `set-file` for `P`.
+- **C1** â€” `L(P)` is `absent`: **download** it into `E:`, keep the Drive copy. Action `download` with `relPath` and `localPath` both `P`, `driveFileId` the Drive id, `size` the Drive size. Ops: `set-file` for `P` with the LiveEntry built from the Drive metadata and the local path.
+- **C2** â€” `L(P)` is `present` and the Drive `md5` equals the local `md5`: **no transfer**. The step's `action` is `null`; ops carry `set-file` for `P`.
+- **C3** â€” `L(P)` is `present` and the content differs: **local wins**. Action `replace-content` with `driveFileId` the Drive id and the local `md5` and `size`. Ops: `set-file` for `P`.
 
-When Drive provides **no** `md5`, C2 and C3 cannot be decided by content: fall back to comparing `size` and `modifiedTime`; if those are also inconclusive, treat it as C3 but **without archiving** (there is no older version to preserve — the executor is told not to archive when the action carries `md5: null`).
+When Drive provides **no** `md5`, C2 and C3 cannot be decided by content: fall back to comparing `size` and `modifiedTime`; if those are also inconclusive, treat it as C3 but **without archiving** (there is no older version to preserve â€” the executor is told not to archive when the action carries `md5: null`).
 
 Group E:
 
-- **E1** — `L(P)` is `present`: **upload**. Action `upload` with `localPath` `P`, the local `md5` and `size`. Ops: `set-file` for `P`.
+- **E1** â€” `L(P)` is `present`: **upload**. Action `upload` with `localPath` `P`, the local `md5` and `size`. Ops: `set-file` for `P`.
 
 Both groups produce `LiveEntry` objects whose `driveMd5` is the Drive checksum or `null`, whose `localMd5` is the computed local checksum or `null`, and whose `localSize`/`localMtimeMs` come from the local entry.
 
@@ -1036,7 +1036,7 @@ git commit -m "feat(core): diff dispatch skeleton with rule groups C and E"
 
 ---
 
-## Task 7: Rule group B — the live manifest entry, including the one trash rule
+## Task 7: Rule group B â€” the live manifest entry, including the one trash rule
 
 **Files:**
 - Modify: `src/core/diff.ts`
@@ -1121,13 +1121,13 @@ it('retires both sides when the file is gone from both (B4)', async () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npm test -- test/diff.test.ts`
-Expected: FAIL — the new assertions fail (the group is not implemented).
+Expected: FAIL â€” the new assertions fail (the group is not implemented).
 
 - [ ] **Step 3: Implement group B in `src/core/diff.ts`**
 
-Implement spec §6.3's group B exactly: **B0** (the only trash), **B1** (the four-way compare), **B2** (id differs — probe, then treat the file at `P` as new-on-Drive), **B3** (Drive file absent, local present — probe, then upload or report), **B4** (both absent — retire as `gone`).
+Implement spec Â§6.3's group B exactly: **B0** (the only trash), **B1** (the four-way compare), **B2** (id differs â€” probe, then treat the file at `P` as new-on-Drive), **B3** (Drive file absent, local present â€” probe, then upload or report), **B4** (both absent â€” retire as `gone`).
 
-Every rule that retires a live entry must carry the entry's `localPath` into the retired record when that entry was Google-native. The `trashed-externally` and `gone` states are used exactly as the spec's §5.4 table prescribes; `trashed` is used only by B0.
+Every rule that retires a live entry must carry the entry's `localPath` into the retired record when that entry was Google-native. The `trashed-externally` and `gone` states are used exactly as the spec's Â§5.4 table prescribes; `trashed` is used only by B0.
 
 B1's content comparison uses the local `md5` from `io.md5Of(relPath)`, comparing against the manifest's `driveMd5` and the Drive file's current `md5`. When the manifest has no `driveMd5` (no checksum available), fall back to size and `modifiedTime`; if that is inconclusive, treat the local side as changed.
 
@@ -1145,7 +1145,7 @@ git commit -m "feat(core): rule group B including the single trash rule"
 
 ---
 
-## Task 8: Rule group D — the retired path
+## Task 8: Rule group D â€” the retired path
 
 **Files:**
 - Modify: `src/core/diff.ts`
@@ -1207,15 +1207,15 @@ it('does nothing when the path is absent locally (D5)', async () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npm test -- test/diff.test.ts`
-Expected: FAIL — the new assertions fail.
+Expected: FAIL â€” the new assertions fail.
 
 - [ ] **Step 3: Implement group D in `src/core/diff.ts`**
 
-Implement spec §6.3's group D: **D1** (the four probe outcomes), **D2** (never re-upload an externally-trashed file), **D3**, **D4**, **D5**.
+Implement spec Â§6.3's group D: **D1** (the four probe outcomes), **D2** (never re-upload an externally-trashed file), **D3**, **D4**, **D5**.
 
 D1's `trashed` branch emits **two** actions in order: `untrash` first, then `replace-content`. The `untrash` step's ops include the `set-file` and the `resynced` transition so the manifest reflects the restored file even if the subsequent content replacement fails.
 
-D1's `alive, same path` branch emits only `replace-content` — no `untrash`, because the file is already live.
+D1's `alive, same path` branch emits only `replace-content` â€” no `untrash`, because the file is already live.
 
 - [ ] **Step 4: Run typecheck and tests**
 
@@ -1231,7 +1231,7 @@ git commit -m "feat(core): rule group D for retired paths"
 
 ---
 
-## Task 9: Rule group R — the retired id, the resurrection guard
+## Task 9: Rule group R â€” the retired id, the resurrection guard
 
 **Files:**
 - Modify: `src/core/diff.ts`
@@ -1307,20 +1307,20 @@ it('never trashes or uploads over a Google-native file in group R', async () => 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npm test -- test/diff.test.ts`
-Expected: FAIL — the new assertions fail.
+Expected: FAIL â€” the new assertions fail.
 
 - [ ] **Step 3: Implement group R in `src/core/diff.ts`**
 
-Implement spec §6.3's group R: **R1** (trashed/trashed-externally, local absent — report once, flip to `restored`), **R2** (restored, local absent — nothing, ever), **R3** (restored, local present — conflict, report), **R4** (gone/purged — anomaly, leave alone), **R5** (moved, local absent — download), **R6** (moved, local present — replace in place), **R7** (trashed/trashed-externally, local present — replace in place, keep the restored id), **R8** (rebased, local absent — never download), **R9** (rebased, both sides unchanged — adopt), **R10** (rebased, either side changed — reconcile).
+Implement spec Â§6.3's group R: **R1** (trashed/trashed-externally, local absent â€” report once, flip to `restored`), **R2** (restored, local absent â€” nothing, ever), **R3** (restored, local present â€” conflict, report), **R4** (gone/purged â€” anomaly, leave alone), **R5** (moved, local absent â€” download), **R6** (moved, local present â€” replace in place), **R7** (trashed/trashed-externally, local present â€” replace in place, keep the restored id), **R8** (rebased, local absent â€” never download), **R9** (rebased, both sides unchanged â€” adopt), **R10** (rebased, either side changed â€” reconcile).
 
 Two rules carry extra weight and must be exactly right:
 
 - **R1** must never produce a `download` action. The file is on Drive and the user restored it deliberately. The app reports it once and flips the record to `restored`; every later run is silent (R2).
 - **R9 and R10** must both write `W-retire(id, "resynced", P)` so the path returns to the ordinary rules (B0/B1) on the next run. Leaving the record as `rebased` would pin the path in Group R forever, and a local deletion would never be trashed.
 
-R10 compares **both** sides: the local `md5` against `rec.prevLocalMd5`, and the Drive file's current `md5` against `rec.md5`. R9 requires both to match. Otherwise R10 reconciles by the conflict principle — `drive-wins` during a rebase.
+R10 compares **both** sides: the local `md5` against `rec.prevLocalMd5`, and the Drive file's current `md5` against `rec.md5`. R9 requires both to match. Otherwise R10 reconciles by the conflict principle â€” `drive-wins` during a rebase.
 
-The Google-native guard on **R6**, **R7** and **R10** applies: when the Drive file at `P` is Google-native, the rule emits no Drive action and no local-wins upload — it reports and changes nothing.
+The Google-native guard on **R6**, **R7** and **R10** applies: when the Drive file at `P` is Google-native, the rule emits no Drive action and no local-wins upload â€” it reports and changes nothing.
 
 - [ ] **Step 4: Run typecheck and tests**
 
@@ -1336,7 +1336,7 @@ git commit -m "feat(core): rule group R guarding against resurrecting deleted fi
 
 ---
 
-## Task 10: Rule group N — Google-native files
+## Task 10: Rule group N â€” Google-native files
 
 **Files:**
 - Modify: `src/core/diff.ts`
@@ -1424,11 +1424,11 @@ it('reports a local file occupying a native path (N10)', async () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npm test -- test/diff.test.ts`
-Expected: FAIL — the new assertions fail.
+Expected: FAIL â€” the new assertions fail.
 
 - [ ] **Step 3: Implement group N in `src/core/diff.ts`**
 
-Implement spec §6.3's group N: **N1**–**N11**.
+Implement spec Â§6.3's group N: **N1**â€“**N11**.
 
 N1's "adopt an identical existing export" comparison uses `io.exportNative(driveFileId)` and `io.readLocalBytes(localPath)` and compares the byte buffers. When they differ, the export goes to the **planned** path from `planExportPaths`, which is guaranteed not to be the occupied path.
 
@@ -1464,19 +1464,19 @@ git commit -m "feat(core): rule group N for Google-native files"
 
 `test/exhaustiveness.test.ts` enumerates the full cross-product of:
 
-- `Dp` ∈ {usable, absent, unusable}
-- `Dp.mimeType` ∈ {native, binary}
-- `Mp` ∈ {exists, null}
-- `Mp.driveMimeType` ∈ {native, binary}
-- `Lp.state` ∈ {present, absent, unknown}
-- `rec` ∈ {none} ∪ {trashed, trashed-externally, gone, restored, purged, moved, rebased, resynced}
-- `Rt(P)` ∈ {empty, non-empty × the 8 states}
-- `claimedBy(P)` ∈ {no foreign claim, claimed by K ≠ P, in retiredClaims}
-- `mergeOnly` ∈ {true, false}
-- `driveWins` ∈ {true, false}
-- `Dp.id == Mp.driveFileId` ∈ {true, false}
+- `Dp` âˆˆ {usable, absent, unusable}
+- `Dp.mimeType` âˆˆ {native, binary}
+- `Mp` âˆˆ {exists, null}
+- `Mp.driveMimeType` âˆˆ {native, binary}
+- `Lp.state` âˆˆ {present, absent, unknown}
+- `rec` âˆˆ {none} âˆª {trashed, trashed-externally, gone, restored, purged, moved, rebased, resynced}
+- `Rt(P)` âˆˆ {empty, non-empty Ã— the 8 states}
+- `claimedBy(P)` âˆˆ {no foreign claim, claimed by K â‰  P, in retiredClaims}
+- `mergeOnly` âˆˆ {true, false}
+- `driveWins` âˆˆ {true, false}
+- `Dp.id == Mp.driveFileId` âˆˆ {true, false}
 
-and asserts the spec's §11.1 invariants:
+and asserts the spec's Â§11.1 invariants:
 
 ```ts
 it('every combination resolves to exactly one rule or an enumerated no-op', () => {
@@ -1536,11 +1536,11 @@ returning the ids of every rule whose condition matches, in dispatch order.
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/exhaustiveness.test.ts`
-Expected: FAIL — `matchRule` is not exported, or some combination throws `notImplemented`.
+Expected: FAIL â€” `matchRule` is not exported, or some combination throws `notImplemented`.
 
 - [ ] **Step 3: Export `matchRule` and close every gap the matrix finds**
 
-Refactor the dispatch so each rule's condition is a named predicate that `matchRule` can evaluate without performing I/O. The `io` calls (`probe`, `md5Of`, `exportNative`) must be injectable as **pre-computed values** for the matrix — add an optional `precomputed` field to `DiffInput`:
+Refactor the dispatch so each rule's condition is a named predicate that `matchRule` can evaluate without performing I/O. The `io` calls (`probe`, `md5Of`, `exportNative`) must be injectable as **pre-computed values** for the matrix â€” add an optional `precomputed` field to `DiffInput`:
 
 ```ts
 export interface DiffInput {
@@ -1670,7 +1670,7 @@ it('rebase sets the rebase pending flag with drive-wins', () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/guards.test.ts`
-Expected: FAIL — `Cannot find module '../src/core/guards'`.
+Expected: FAIL â€” `Cannot find module '../src/core/guards'`.
 
 - [ ] **Step 3: Implement `src/core/guards.ts`**
 
@@ -1682,7 +1682,7 @@ Expected: FAIL — `Cannot find module '../src/core/guards'`.
 - A key present only in `currentCounts` has `last = 0` and never trips.
 - Returns every tripping directory as `{ dir, last, current }`.
 
-`checkVolumeFingerprint(recorded, current)` returns `true` when the volume changed. A missing `recorded` returns `false` — the first run has nothing to compare against.
+`checkVolumeFingerprint(recorded, current)` returns `true` when the volume changed. A missing `recorded` returns `false` â€” the first run has nothing to compare against.
 
 `rebaseMirror(m, now)`:
 
@@ -1826,7 +1826,7 @@ it('counts uploads, downloads, trashes and errors separately', async () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/sync.test.ts`
-Expected: FAIL — `Cannot find module '../src/core/sync'`.
+Expected: FAIL â€” `Cannot find module '../src/core/sync'`.
 
 - [ ] **Step 3: Implement `src/drive/client.ts` and `src/core/logger.ts`**
 
@@ -1985,12 +1985,12 @@ it('retries the verification lookup for about five seconds', async () => { /* ..
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/httpClient.test.ts`
-Expected: FAIL — `Cannot find module '../src/drive/httpClient'`.
+Expected: FAIL â€” `Cannot find module '../src/drive/httpClient'`.
 
 - [ ] **Step 3: Implement `src/drive/httpClient.ts`**
 
-- `listChildren(folderId)` pages through `GET /drive/v3/files?q=<buildListQuery([folderId])>&fields=id,name,mimeType,size,md5Checksum,modifiedTime,trashed,parents&pageSize=1000&pageToken=…`, following `nextPageToken` until absent. Each returned item becomes a `DriveNode` with `parentPath: ''` — the caller assembles paths.
-- `getFile(fileId)` issues `GET /drive/v3/files/{id}?fields=…`; a 404 resolves `null`.
+- `listChildren(folderId)` pages through `GET /drive/v3/files?q=<buildListQuery([folderId])>&fields=id,name,mimeType,size,md5Checksum,modifiedTime,trashed,parents&pageSize=1000&pageToken=â€¦`, following `nextPageToken` until absent. Each returned item becomes a `DriveNode` with `parentPath: ''` â€” the caller assembles paths.
+- `getFile(fileId)` issues `GET /drive/v3/files/{id}?fields=â€¦`; a 404 resolves `null`.
 - `createFolder(name, parentId)` issues `POST /drive/v3/files` with `{ name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] }`.
 - `createFile(...)` delegates to `uploadResumable` with endpoint `https://www.googleapis.com/upload/drive/v3/files` and metadata `{ name, parents: [parentId], mimeType }`.
 - `updateContent(fileId, ...)` delegates to `uploadResumable` with endpoint `https://www.googleapis.com/upload/drive/v3/files/{fileId}?uploadType=resumable` and `PATCH`.
@@ -2016,7 +2016,7 @@ GET https://www.googleapis.com/upload/drive/v3/files
   &fields=id,name,size,md5Checksum
 ```
 
-and selects the candidate whose `md5Checksum` equals the uploaded `md5` **and** whose `size` matches. It retries the lookup for about five seconds before giving up. If nothing matches, it returns `{ fileId: null, verifiedByLookup: true }` — the caller records a per-file error and the run continues. The function never opens a second upload session.
+and selects the candidate whose `md5Checksum` equals the uploaded `md5` **and** whose `size` matches. It retries the lookup for about five seconds before giving up. If nothing matches, it returns `{ fileId: null, verifiedByLookup: true }` â€” the caller records a per-file error and the run continues. The function never opens a second upload session.
 
 - [ ] **Step 5: Run typecheck and tests**
 
@@ -2118,7 +2118,7 @@ Credential-store tests assert the secret is **never** written in plain text: aft
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/oauth.test.ts`
-Expected: FAIL — `Cannot find module '../src/drive/oauth'`.
+Expected: FAIL â€” `Cannot find module '../src/drive/oauth'`.
 
 - [ ] **Step 3: Implement `src/drive/oauth.ts`**
 
@@ -2130,7 +2130,7 @@ https://accounts.google.com/o/oauth2/v2/auth?client_id=<cid>
   &access_type=offline&prompt=consent&include_granted_scopes=true&state=<state>
 ```
 
-`escapeDriveQuery` escapes `\` → `\\` and `'` → `\'`.
+`escapeDriveQuery` escapes `\` â†’ `\\` and `'` â†’ `\'`.
 
 `exchangeCode` POSTs to `https://oauth2.googleapis.com/token` with `code`, `client_id`, `client_secret`, `redirect_uri`, `grant_type=authorization_code`. `refreshAccessToken` POSTs with `refresh_token`, `grant_type=refresh_token`.
 
@@ -2253,7 +2253,7 @@ it('writes only inside the resolved mirror folder', async () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm test -- test/runner.test.ts`
-Expected: FAIL — `Cannot find module '../src/main/runner'`.
+Expected: FAIL â€” `Cannot find module '../src/main/runner'`.
 
 - [ ] **Step 3: Implement `src/main/runner.ts`**
 
@@ -2275,22 +2275,22 @@ export interface Runner {
 `createRunner` runs the full pipeline for one mirror:
 
 1. `scanLocal` the mirror root, passing the manifest's known paths so deleted files appear as `absent`.
-2. **Guard 1** — root missing → emit a `guard` event, mark the mirror `skipped`, continue to the next mirror.
-3. **Guard 2** — compare `fs.statSync(root).dev` with the manifest's recorded volume serial. On mismatch → emit a `guard` event with `canOverride: true`, mark the mirror `skipped`, and **do not proceed**.
-4. **Guard 3** — `checkCountDrop` over the manifest's `lastCounts` and the scan's `recursiveCounts`. On a hit → emit a `guard` event naming every tripped directory, mark the mirror `skipped`, and **do not proceed**.
-5. **Guard 4** — resolve the Drive folder by name under `My Drive`; more than one match → emit a `guard` event, mark the mirror `skipped`. The resolved folder id and every id beneath it is the **only** thing this run may write to; a mirror whose root cannot be resolved unambiguously writes nothing at all.
+2. **Guard 1** â€” root missing â†’ emit a `guard` event, mark the mirror `skipped`, continue to the next mirror.
+3. **Guard 2** â€” compare `fs.statSync(root).dev` with the manifest's recorded volume serial. On mismatch â†’ emit a `guard` event with `canOverride: true`, mark the mirror `skipped`, and **do not proceed**.
+4. **Guard 3** â€” `checkCountDrop` over the manifest's `lastCounts` and the scan's `recursiveCounts`. On a hit â†’ emit a `guard` event naming every tripped directory, mark the mirror `skipped`, and **do not proceed**.
+5. **Guard 4** â€” resolve the Drive folder by name under `My Drive`; more than one match â†’ emit a `guard` event, mark the mirror `skipped`. The resolved folder id and every id beneath it is the **only** thing this run may write to; a mirror whose root cannot be resolved unambiguously writes nothing at all.
 6. Build the Drive tree by BFS from the resolved folder using `buildListQuery`, page through with `client.listChildren`, and assemble with `buildDriveTree`.
 7. `planExportPaths`, `buildClaimIndex`, then `diffMirror`.
 8. `executePlan`.
 9. Merge the resulting counts into the manifest, update `lastCounts` from the scan, set `lastSyncAt`, and checkpoint.
 
-**Baseline update semantics (spec §8.3).** `lastCounts` is updated **only when the mirror ran to completion**. A mirror skipped by any guard keeps its previous counts untouched. This is not cosmetic: if a skipped mirror's counts were rewritten to the post-deletion values, the next run would compare `0` against `0`, would not trip, and would proceed to trash the deleted subtree — the guard would defeat itself after a single use. A mirror that ran under a **"Sync anyway"** override **does** update its counts, which is what makes the override permanent for the affected directories.
+**Baseline update semantics (spec Â§8.3).** `lastCounts` is updated **only when the mirror ran to completion**. A mirror skipped by any guard keeps its previous counts untouched. This is not cosmetic: if a skipped mirror's counts were rewritten to the post-deletion values, the next run would compare `0` against `0`, would not trip, and would proceed to trash the deleted subtree â€” the guard would defeat itself after a single use. A mirror that ran under a **"Sync anyway"** override **does** update its counts, which is what makes the override permanent for the affected directories.
 
 A **"Sync anyway"** override is an argument on `syncNow` that bypasses **only** Guard 3 for that mirror, and it is recorded in the summary.
 
 - [ ] **Step 4: Implement `src/main/window.ts`, `src/main/ipc.ts`, `src/main/index.ts`**
 
-- `window.ts` creates the `BrowserWindow` at 1180×760 with `titleBarStyle: 'default'`, `backgroundColor: '#1b1b1f'`, and `webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true }`. It loads `src/renderer/index.html` in dev and `out/renderer/index.html` in production, and follows the OS theme.
+- `window.ts` creates the `BrowserWindow` at 1180Ã—760 with `titleBarStyle: 'default'`, `backgroundColor: '#1b1b1f'`, and `webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true }`. It loads `src/renderer/index.html` in dev and `out/renderer/index.html` in production, and follows the OS theme.
 - `ipc.ts` registers handlers for:
 
 ```
@@ -2332,7 +2332,7 @@ export interface DriveMirrorApi {
 }
 ```
 
-`contextBridge.exposeInMainWorld('driveMirror', api)` — only those members, each wrapped so a rejected promise becomes a rejected promise rather than an unhandled rejection.
+`contextBridge.exposeInMainWorld('driveMirror', api)` â€” only those members, each wrapped so a rejected promise becomes a rejected promise rather than an unhandled rejection.
 
 - [ ] **Step 6: Run typecheck and tests**
 
@@ -2396,7 +2396,7 @@ export interface FolderCardProps {
 
 It shows the mirror name, the local root, the Drive destination, the live file count, the relative last-synced time, the status chip, and the five last-run counts.
 
-`SummaryBar` shows `Uploaded`, `Updated`, `Downloaded`, `Trashed`, `Errors`. When all five are zero it renders the muted line **"Everything is up to date — no changes."** and **no modal, toast, sound, or scroll change**.
+`SummaryBar` shows `Uploaded`, `Updated`, `Downloaded`, `Trashed`, `Errors`. When all five are zero it renders the muted line **"Everything is up to date â€” no changes."** and **no modal, toast, sound, or scroll change**.
 
 `ProgressPanel` shows the overall bar plus the current file and a running total.
 
@@ -2421,7 +2421,7 @@ export interface GuardBannerProps {
 
 `index.html` declares `<div id="root">`, sets `lang="en"`, and loads `/main.tsx`.
 
-`styles.css` defines light and dark themes via `prefers-color-scheme`, using the Win11 accent `#0067C0`, a 4px–8px corner radius, and the system font stack. The body has no scroll jump: the summary area reserves its height so an expanding log does not shift the cards.
+`styles.css` defines light and dark themes via `prefers-color-scheme`, using the Win11 accent `#0067C0`, a 4pxâ€“8px corner radius, and the system font stack. The body has no scroll jump: the summary area reserves its height so an expanding log does not shift the cards.
 
 - [ ] **Step 4: Verify the renderer builds and the app launches**
 
@@ -2447,7 +2447,7 @@ git commit -m "feat(ui): renderer with folder cards, progress, summary, and guar
 - Modify: `package.json` (add the `build` key)
 
 **Interfaces:**
-- Consumes: everything from Tasks 1–17.
+- Consumes: everything from Tasks 1â€“17.
 - Produces: a packaged `.exe` and a verified live sync against the user's real Drive.
 
 - [ ] **Step 1: Write `electron-builder.yml`**
@@ -2511,9 +2511,9 @@ Verify, in order:
 1. The sign-in completes and the account email appears in the header.
 2. The first sync reports the two mirrors' Drive folders being created or adopted, and the file counts settle at 43 for `Medicine`.
 3. `My Drive/Medicine` in the browser contains the expected folder structure, with **43 files** and the correct subfolder names `incision` and `researchs`.
-4. Running **Sync now** a second time reports **"Everything is up to date — no changes."** and changes nothing.
-5. Delete one file from `E:\Medicine`, sync again, and confirm the summary shows `Trashed 1` and that the file is in the Drive Trash — **not** deleted.
-6. Restore that file from the Drive Trash in the browser, sync again, and confirm the app **reports** the restore but **does not** re-download it into `E:\Medicine` (§13 item 5).
+4. Running **Sync now** a second time reports **"Everything is up to date â€” no changes."** and changes nothing.
+5. Delete one file from `E:\Medicine`, sync again, and confirm the summary shows `Trashed 1` and that the file is in the Drive Trash â€” **not** deleted.
+6. Restore that file from the Drive Trash in the browser, sync again, and confirm the app **reports** the restore but **does not** re-download it into `E:\Medicine` (Â§13 item 5).
 7. Delete the restored file from `E:\Medicine` again and sync, confirming the manifest now treats it as a fresh local deletion.
 
 **If any step behaves differently from the spec, stop and fix the code before continuing.** Do not proceed to the next step on a failing check.
@@ -2538,12 +2538,12 @@ State plainly which of the seven live checks passed, which did not, and what the
 
 ## Self-Review
 
-**Spec coverage.** Every section of the spec maps to tasks: §5.1–§5.5 → Tasks 2, 12; §6.1–§6.8 → Tasks 6–11; §7 → Task 13; §8 → Tasks 12, 16; §9 → Tasks 14, 15; §10 → Task 17; §11 → Tasks 3–14; §13's approved decisions → Global Constraints. §12's risk table is addressed by: the trashed-file filter (Task 4), the global retired-id check (Task 9), the `rebased` release (Tasks 9, 12), the three-state local tree (Task 3), the distinct `trashed`/`trashed-externally` states (Tasks 7, 8), the native guards (Tasks 10, 11), the `drive-wins` inversion (Task 9), the B4 probe (Task 7), the write-ahead intents (Task 13), the md5-matched upload verification (Task 14), the archive fail-closed rule (Task 13), and the `lastCounts` baseline semantics (Task 12).
+**Spec coverage.** Every section of the spec maps to tasks: Â§5.1â€“Â§5.5 â†’ Tasks 2, 12; Â§6.1â€“Â§6.8 â†’ Tasks 6â€“11; Â§7 â†’ Task 13; Â§8 â†’ Tasks 12, 16; Â§9 â†’ Tasks 14, 15; Â§10 â†’ Task 17; Â§11 â†’ Tasks 3â€“14; Â§13's approved decisions â†’ Global Constraints. Â§12's risk table is addressed by: the trashed-file filter (Task 4), the global retired-id check (Task 9), the `rebased` release (Tasks 9, 12), the three-state local tree (Task 3), the distinct `trashed`/`trashed-externally` states (Tasks 7, 8), the native guards (Tasks 10, 11), the `drive-wins` inversion (Task 9), the B4 probe (Task 7), the write-ahead intents (Task 13), the md5-matched upload verification (Task 14), the archive fail-closed rule (Task 13), and the `lastCounts` baseline semantics (Task 12).
 
-**Step scan.** No step says "handle edge cases" or names an undefined function. Every code step names an exact file and either a signature or the values it must produce. Where the spec pins an algorithm — the dispatch order, the guard's trip condition, the export-path planner's candidate order — the plan gives the algorithm.
+**Step scan.** No step says "handle edge cases" or names an undefined function. Every code step names an exact file and either a signature or the values it must produce. Where the spec pins an algorithm â€” the dispatch order, the guard's trip condition, the export-path planner's candidate order â€” the plan gives the algorithm.
 
-**Type consistency.** `LiveEntry`, `RetiredRecord`, `MirrorManifest` and `Manifest` are defined once in Task 2 and used verbatim thereafter. `DriveFile` / `DriveNode` / `DriveTree` are defined in Task 2 and consumed in Tasks 4, 5, 6. `SyncAction`, `PlanStep`, `SyncPlan`, `ProbeResult`, `DiffIo` and `DiffInput` are defined in Task 6 and used in Tasks 7–11 and 13. `DriveClient` is defined in Task 13 and implemented in Task 14. `MirrorCard`, `RunSummary`, `AppState`, `AppEvent` are defined in Task 16 and consumed in Task 17. `Settings` and `CredentialStore` are defined in Task 15 and consumed in Tasks 16, 17.
+**Type consistency.** `LiveEntry`, `RetiredRecord`, `MirrorManifest` and `Manifest` are defined once in Task 2 and used verbatim thereafter. `DriveFile` / `DriveNode` / `DriveTree` are defined in Task 2 and consumed in Tasks 4, 5, 6. `SyncAction`, `PlanStep`, `SyncPlan`, `ProbeResult`, `DiffIo` and `DiffInput` are defined in Task 6 and used in Tasks 7â€“11 and 13. `DriveClient` is defined in Task 13 and implemented in Task 14. `MirrorCard`, `RunSummary`, `AppState`, `AppEvent` are defined in Task 16 and consumed in Task 17. `Settings` and `CredentialStore` are defined in Task 15 and consumed in Tasks 16, 17.
 
 **Review Focus.** All five lines are pinned: line 1 by Task 4's `listing.test.ts` and Task 11; line 2 by Task 3's `localScan.test.ts` and Task 7's B0 guard test; line 3 by Task 9's R1/R2 tests; line 4 by Task 12's `checkVolumeFingerprint` test and Task 18's manual guard check; line 5 by Task 6's E1 test and Task 11's INV-2.
 
-**Proportion.** The plan is roughly the same length as the spec's normative sections. It carries signatures, test names, and pinned values — not implementations. The only bodies included are ones where the spec fixes the exact output (the listing query string, the auth URL shape, the electron-builder YAML), because those are wire formats and config, not logic.
+**Proportion.** The plan is roughly the same length as the spec's normative sections. It carries signatures, test names, and pinned values â€” not implementations. The only bodies included are ones where the spec fixes the exact output (the listing query string, the auth URL shape, the electron-builder YAML), because those are wire formats and config, not logic.
