@@ -50,4 +50,10 @@ export interface DriveClient {
 
   /** Restore a Drive file from the Drive trash. */
   untrash(fileId: string): Promise<void>
+
+  /** Move a folder to a new parent, and optionally give it a new name. */
+  moveFolder(fileId: string, newParentId: string, newName?: string): Promise<void>
+
+  /** The email address of the account that is signed in, or null. */
+  getAccountEmail(): Promise<string | null>
 }

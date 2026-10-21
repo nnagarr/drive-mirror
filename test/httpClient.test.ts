@@ -404,3 +404,60 @@ describe('resumable uploads', () => {
     expect(sessions).toHaveLength(1)
   })
 })
+
+describe('moving a folder, and asking who the account is', () => {
+  it('moves a folder by patching its parents', async () => {
+    const { impl, calls } = stub(() =>
+      new Response(JSON.stringify({ id: 'f1', name: 'Photos', parents: ['new'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const client = createDriveClient(async () => 'token', { fetchImpl: impl })
+
+    await client.moveFolder('f1', 'new')
+
+    expect(calls.some((c) => c.method === 'PATCH' && c.url.includes('f1'))).toBe(true)
+    expect(JSON.parse(String(calls[0]!.body))).toEqual({ parents: ['new'] })
+  })
+
+  it('renames a folder in the same request when it moves it', async () => {
+    const { impl, calls } = stub(() =>
+      new Response(JSON.stringify({ id: 'f1', name: 'Pictures', parents: ['new'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const client = createDriveClient(async () => 'token', { fetchImpl: impl })
+
+    await client.moveFolder('f1', 'new', 'Pictures')
+
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(String(calls[0]!.body))).toEqual({ parents: ['new'], name: 'Pictures' })
+  })
+
+  it('reads the account email from the about endpoint', async () => {
+    const { impl, calls } = stub(() =>
+      new Response(JSON.stringify({ user: { emailAddress: 'me@example.com' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const client = createDriveClient(async () => 'token', { fetchImpl: impl })
+
+    expect(await client.getAccountEmail()).toBe('me@example.com')
+    expect(calls[0]!.url).toContain('/drive/v3/about')
+  })
+
+  it('has no account email when Drive does not give one', async () => {
+    const { impl } = stub(() =>
+      new Response(JSON.stringify({ user: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const client = createDriveClient(async () => 'token', { fetchImpl: impl })
+
+    expect(await client.getAccountEmail()).toBeNull()
+  })
+})

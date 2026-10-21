@@ -320,6 +320,34 @@ export function createDriveClient(
         headers: { 'Content-Type': 'application/json' },
       })
     },
+
+    async moveFolder(
+      fileId: string,
+      newParentId: string,
+      newName?: string,
+    ): Promise<void> {
+      // One request moves the folder and renames it, so a destination
+      // change is a single round trip and never half-applied.
+      const body: { parents: string[]; name?: string } = { parents: [newParentId] }
+      if (newName !== undefined) body.name = newName
+      await request(
+        'PATCH',
+        `${baseUrl}/drive/v3/files/${encodeURIComponent(fileId)}?addParents=true`,
+        {
+          body: JSON.stringify(body),
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )
+    },
+
+    async getAccountEmail(): Promise<string | null> {
+      const response = await request(
+        'GET',
+        `${baseUrl}/drive/v3/about?fields=${encodeURIComponent('user(emailAddress)')}`,
+      )
+      const body = (await response.json()) as { user?: { emailAddress?: string } }
+      return body.user?.emailAddress ?? null
+    },
   }
 
   return client

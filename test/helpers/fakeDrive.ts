@@ -31,6 +31,8 @@ export interface DriveCall {
     | 'export'
     | 'trash'
     | 'untrash'
+    | 'moveFolder'
+    | 'accountEmail'
   id?: string
   name?: string
   /** Where a download or export wrote to. */
@@ -152,7 +154,24 @@ export class FakeDrive implements DriveClient {
   async getFile(fileId: string): Promise<DriveNode | null> {
     this.record({ op: 'get', id: fileId })
     const file = this.files.get(fileId)
-    return file ? this.node(file) : null
+    if (file) return this.node(file)
+    // A folder is a file as far as the Drive API is concerned, so the
+    // fake answers for folders too.
+    const folder = this.folders.get(fileId)
+    if (folder) {
+      return {
+        entry: {
+          id: folder.id,
+          name: folder.name,
+          mimeType: 'application/vnd.google-apps.folder',
+          modifiedTime: '2026-10-20T18:00:00.000Z',
+          trashed: false,
+          parents: [folder.parentId],
+        },
+        parentPath: '',
+      }
+    }
+    return null
   }
 
   async createFolder(name: string, parentId: string): Promise<{ id: string }> {
@@ -234,6 +253,29 @@ export class FakeDrive implements DriveClient {
     const file = this.files.get(fileId)
     if (!file) throw new Error(`fake drive: no file ${fileId}`)
     file.trashed = false
+  }
+
+  async moveFolder(
+    fileId: string,
+    newParentId: string,
+    newName?: string,
+  ): Promise<void> {
+    this.record({ op: 'moveFolder', id: fileId, parentId: newParentId, name: newName })
+    const folder = this.folders.get(fileId)
+    if (folder) {
+      folder.parentId = newParentId
+      if (newName !== undefined) folder.name = newName
+      return
+    }
+    const file = this.files.get(fileId)
+    if (!file) throw new Error(`fake drive: no folder ${fileId}`)
+    file.parents = [newParentId]
+    if (newName !== undefined) file.name = newName
+  }
+
+  async getAccountEmail(): Promise<string | null> {
+    this.record({ op: 'accountEmail' })
+    return 'test@example.com'
   }
 
   private node(file: FakeFile): DriveNode {
