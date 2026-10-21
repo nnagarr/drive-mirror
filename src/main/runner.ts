@@ -194,6 +194,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       status: 'idle',
       counts: noCounts(),
       recovered: [],
+      enabled: true,
     }
     cards.set(name, created)
     return created
@@ -220,6 +221,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         const mirrorCard = card(config.name)
         mirrorCard.localRoot = config.root
         mirrorCard.drivePath = `My Drive/${config.drivePath}`
+        mirrorCard.enabled = config.enabled
         // The files the user restored on Drive, waiting to be pulled back.
         mirrorCard.recovered = Object.values(manifest.mirrors[config.name]?.retired ?? {})
           .filter((record) => record.state === 'restored')

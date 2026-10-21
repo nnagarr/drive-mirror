@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { JSX } from 'react'
+import { AddMirrorDialog } from './components/AddMirrorDialog'
 import { FolderCard } from './components/FolderCard'
 import { GuardBanner } from './components/GuardBanner'
 import { LogView } from './components/LogView'
 import { ProgressPanel } from './components/ProgressPanel'
 import { SettingsDialog } from './components/SettingsDialog'
+import { SetupWizard } from './components/SetupWizard'
 import { SummaryBar } from './components/SummaryBar'
 import type { AppEvent, AppState, RunSummary } from '../main/ipc'
 import type { Settings } from '../main/settings'
@@ -41,6 +43,21 @@ export function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [logOpen, setLogOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** Something the user was not there to see. */
+  const [notice, setNotice] = useState<string | null>(null)
+  /** The mirror being added, or the one being changed. */
+  const [editing, setEditing] = useState<{ name: string; root: string; drivePath: string } | null>(
+    null,
+  )
+  const [wizardOpen, setWizardOpen] = useState(false)
+
+  const refresh = useCallback(async () => {
+    try {
+      setState(await window.driveMirror.getState())
+    } catch {
+      // The state will be right the next time something happens.
+    }
+  }, [])
 
   useEffect(() => {
     const api = window.driveMirror
@@ -84,6 +101,9 @@ export function App(): JSX.Element {
             canOverride: event.canOverride,
           })
           break
+        case 'notice':
+          setNotice(event.message)
+          break
         case 'error':
           setError(event.message)
           break
@@ -91,7 +111,18 @@ export function App(): JSX.Element {
     })
 
     void api.getState().then(setState).catch(() => setError('The app state could not be read.'))
-    void api.getSettings().then(setSettings).catch(() => undefined)
+    void api
+      .getSettings()
+      .then((loaded) => {
+        setSettings(loaded)
+        // A problem that happened while nobody was watching is waiting in
+        // the settings. It is shown once, and then it is cleared.
+        if (loaded.pendingNotice) {
+          setNotice(loaded.pendingNotice.message)
+          void api.saveSettings({ pendingNotice: null })
+        }
+      })
+      .catch(() => undefined)
 
     return off
   }, [])
@@ -126,6 +157,57 @@ export function App(): JSX.Element {
     }
   }, [])
 
+  const saveMirror = useCallback(
+    async (config: { name: string; root: string; drivePath: string }) => {
+      setError(null)
+      const result = editing
+        ? await window.driveMirror.updateMirror({ name: editing.name, drivePath: config.drivePath })
+        : await window.driveMirror.addMirror(config)
+      if (result.ok) await refresh()
+      return result
+    },
+    [editing, refresh],
+  )
+
+  const removeMirror = useCallback(
+    async (name: string) => {
+      const agreed = window.confirm(
+        `Remove ${name} from the app?\n\n` +
+          'The copy in your Drive is left exactly as it is. The app forgets this ' +
+          'mirror in 30 days, and its history goes with it.',
+      )
+      if (!agreed) return
+      await window.driveMirror.removeMirror(name)
+      await refresh()
+    },
+    [refresh],
+  )
+
+  const setEnabled = useCallback(
+    async (name: string, enabled: boolean) => {
+      await window.driveMirror.setMirrorEnabled(name, enabled)
+      await refresh()
+    },
+    [refresh],
+  )
+
+  const download = useCallback(
+    async (mirror: string, driveFileId: string) => {
+      setError(null)
+      try {
+        const result = await window.driveMirror.downloadRestored(mirror, driveFileId)
+        if (!result.ok) {
+          setError(result.message)
+          return
+        }
+        await refresh()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'The file could not be brought back.')
+      }
+    },
+    [refresh],
+  )
+
   const running = state?.running ?? false
   const mirrors = state?.mirrors ?? []
 
@@ -141,6 +223,13 @@ export function App(): JSX.Element {
           </span>
         </div>
         <div className="topbar__actions">
+          <button
+            type="button"
+            className="button button--quiet"
+            onClick={() => setEditing({ name: '', root: '', drivePath: '' })}
+          >
+            Add a folder
+          </button>
           <button
             type="button"
             className="button button--quiet"
@@ -168,10 +257,34 @@ export function App(): JSX.Element {
         </div>
       )}
 
+      {notice && (
+        <div className="notice" role="status">
+          <span>{notice}</span>
+          <button type="button" className="button button--quiet" onClick={() => setNotice(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <main className="content">
         <section className="grid">
           {mirrors.map((mirror) => (
-            <FolderCard key={mirror.name} mirror={mirror} onSync={(name) => void sync(name)} />
+            <FolderCard
+              key={mirror.name}
+              mirror={mirror}
+              onSync={(name) => void sync(name)}
+              onEdit={(name) => {
+                const found = mirrors.find((m) => m.name === name)
+                setEditing({
+                  name,
+                  root: found?.localRoot ?? '',
+                  drivePath: (found?.drivePath ?? '').replace(/^My Drive\//, ''),
+                })
+              }}
+              onRemove={(name) => void removeMirror(name)}
+              onSetEnabled={(name, enabled) => void setEnabled(name, enabled)}
+              onDownload={(mirrorName, fileId) => void download(mirrorName, fileId)}
+            />
           ))}
         </section>
 
@@ -200,8 +313,45 @@ export function App(): JSX.Element {
         </section>
       </main>
 
+      {editing && (
+        <AddMirrorDialog
+          mirror={
+            editing.name
+              ? {
+                  name: editing.name,
+                  root: editing.root,
+                  drivePath: editing.drivePath,
+                }
+              : undefined
+          }
+          onClose={() => setEditing(null)}
+          onSave={saveMirror}
+        />
+      )}
+
+      {wizardOpen && (
+        <SetupWizard
+          onClose={() => setWizardOpen(false)}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+      )}
+
       {settingsOpen && settings && (
-        <SettingsDialog settings={settings} onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog
+          settings={settings}
+          onClose={() => setSettingsOpen(false)}
+          onShowSetup={() => {
+            setSettingsOpen(false)
+            setWizardOpen(true)
+          }}
+          onScheduleChange={async (patch) => {
+            const next = await window.driveMirror.saveSchedule(patch)
+            setSettings((current) =>
+              current ? { ...current, schedule: next } : current,
+            )
+          }}
+          onSyncNow={() => void sync()}
+        />
       )}
     </div>
   )

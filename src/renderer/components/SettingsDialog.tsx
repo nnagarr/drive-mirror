@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
-import type { Settings } from '../../main/settings'
+import { SchedulePanel } from './SchedulePanel'
+import type { ScheduleConfig, Settings } from '../../main/settings'
 
 export interface SettingsDialogProps {
   settings: Settings
   onClose: () => void
+  /** Open the guide to getting a Google client id and secret. */
+  onShowSetup: () => void
+  /** Save part of the schedule. */
+  onScheduleChange: (patch: Partial<ScheduleConfig>) => Promise<void>
+  /** Sync everything now. */
+  onSyncNow: () => void
 }
 
 /**
@@ -15,7 +22,13 @@ export interface SettingsDialogProps {
  * starts empty every time, and shows a placeholder instead of the stored
  * value. There is no code path that could put it on the screen.
  */
-export function SettingsDialog({ settings, onClose }: SettingsDialogProps): JSX.Element {
+export function SettingsDialog({
+  settings,
+  onClose,
+  onShowSetup,
+  onScheduleChange,
+  onSyncNow,
+}: SettingsDialogProps): JSX.Element {
   const [clientId, setClientId] = useState(settings.clientId)
   const [clientSecret, setClientSecret] = useState('')
   const [guardThreshold, setGuardThreshold] = useState(settings.guardThreshold)
@@ -66,6 +79,38 @@ export function SettingsDialog({ settings, onClose }: SettingsDialogProps): JSX.
       )
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'The connection could not be tested.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function signOut(): Promise<void> {
+    setBusy(true)
+    setStatus(null)
+    try {
+      await window.driveMirror.signOut()
+      setStatus('Signed out of Google. The client id and secret are still stored.')
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'The sign-out did not work.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resetConnection(): Promise<void> {
+    const agreed = window.confirm(
+      'Clear the Google connection?\n\n' +
+        'The sign-in, the client id and the client secret are forgotten. Your ' +
+        'manifest, your mirrors, your schedule and your backups are not touched.',
+    )
+    if (!agreed) return
+    setBusy(true)
+    setStatus(null)
+    try {
+      await window.driveMirror.resetConnection()
+      setStatus('The connection was cleared. Paste in a new client id and secret.')
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'The connection was not cleared.')
     } finally {
       setBusy(false)
     }
@@ -125,6 +170,47 @@ export function SettingsDialog({ settings, onClose }: SettingsDialogProps): JSX.
               onClick={() => void save()}
             >
               Save
+            </button>
+          </div>
+          <p className="field__hint">
+            <button
+              type="button"
+              className="link"
+              onClick={onShowSetup}
+            >
+              How do I get a client id and secret?
+            </button>
+          </p>
+        </section>
+
+        <SchedulePanel
+          schedule={settings.schedule}
+          onSave={onScheduleChange}
+          onRunNow={onSyncNow}
+        />
+
+        <section className="dialog__section">
+          <h3>The Google connection</h3>
+          <p className="field__hint">
+            Clearing the connection forgets the sign-in and the client id and secret. It
+            does not touch your manifest, your mirrors, your schedule or your backups.
+          </p>
+          <div className="dialog__row">
+            <button
+              type="button"
+              className="button button--quiet"
+              disabled={busy}
+              onClick={() => void signOut()}
+            >
+              Sign out of Google
+            </button>
+            <button
+              type="button"
+              className="button button--quiet"
+              disabled={busy}
+              onClick={() => void resetConnection()}
+            >
+              Reset the connection
             </button>
           </div>
         </section>

@@ -22,6 +22,8 @@ export interface MirrorCard {
   fileCount: number
   lastSyncedAt: string | null
   status: 'idle' | 'syncing' | 'skipped' | 'attention' | 'error'
+  /** Whether the mirror takes part in a sync. A paused one is left alone. */
+  enabled: boolean
   counts: { uploaded: number; updated: number; downloaded: number; trashed: number; errors: number }
   /** Files the app trashed that the user has since restored on Drive. */
   recovered: RecoveredFile[]

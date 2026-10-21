@@ -1,10 +1,15 @@
 import type { JSX } from 'react'
 import { count, relativeTime } from '../format'
+import { RecoveredPanel } from './RecoveredPanel'
 import type { MirrorCard } from '../../main/ipc'
 
 export interface FolderCardProps {
   mirror: MirrorCard
   onSync: (name: string) => void
+  onEdit: (name: string) => void
+  onRemove: (name: string) => void
+  onSetEnabled: (name: string, enabled: boolean) => void
+  onDownload: (mirror: string, driveFileId: string) => void
 }
 
 /**
@@ -13,7 +18,14 @@ export interface FolderCardProps {
  * The card answers the three questions a user actually has: which folder is
  * this, is it up to date, and what happened the last time it ran.
  */
-export function FolderCard({ mirror, onSync }: FolderCardProps): JSX.Element {
+export function FolderCard({
+  mirror,
+  onSync,
+  onEdit,
+  onRemove,
+  onSetEnabled,
+  onDownload,
+}: FolderCardProps): JSX.Element {
   const { counts } = mirror
   const busy = mirror.status === 'syncing'
 
@@ -48,6 +60,8 @@ export function FolderCard({ mirror, onSync }: FolderCardProps): JSX.Element {
         <Count label="Err" value={counts.errors} tone="error" />
       </div>
 
+      <RecoveredPanel mirror={mirror} onDownload={onDownload} />
+
       <footer className="card__foot">
         <button
           type="button"
@@ -56,6 +70,27 @@ export function FolderCard({ mirror, onSync }: FolderCardProps): JSX.Element {
           onClick={() => onSync(mirror.name)}
         >
           {busy ? 'Syncing...' : 'Sync this folder'}
+        </button>
+        <button
+          type="button"
+          className="button button--quiet"
+          onClick={() => onEdit(mirror.name)}
+        >
+          Change
+        </button>
+        <button
+          type="button"
+          className="button button--quiet"
+          onClick={() => onSetEnabled(mirror.name, !mirror.enabled)}
+        >
+          {mirror.enabled ? 'Pause' : 'Resume'}
+        </button>
+        <button
+          type="button"
+          className="button button--quiet"
+          onClick={() => onRemove(mirror.name)}
+        >
+          Remove
         </button>
       </footer>
     </article>
@@ -73,7 +108,7 @@ function Count({
 }): JSX.Element {
   return (
     <span className={`count count--${tone} ${value === 0 ? 'count--zero' : ''}`}>
-      <span className="count__value">{value}</span>
+      <span className="count__value">{count(value)}</span>
       <span className="count__label">{label}</span>
     </span>
   )
