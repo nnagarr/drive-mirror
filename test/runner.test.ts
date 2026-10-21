@@ -19,6 +19,7 @@ interface Harness {
   root: string
   client: FakeDrive
   events: AppEvent[]
+  logs: string[]
   store: ReturnType<typeof createManifestStore>
   settings: ReturnType<typeof defaultSettings>
   manifestFile: string
@@ -52,6 +53,7 @@ async function harness(
     root,
     client,
     events: [],
+    logs: [],
     store,
     settings: {
       ...defaultSettings(),
@@ -71,6 +73,7 @@ function runner(box: Harness) {
     store: box.store,
     settings: box.settings,
     emit: (event) => box.events.push(event),
+    log: (message) => box.logs.push(message),
     mirrors: [{ name: 'Medicine', root: box.root }],
     hasCredentials: () => true,
     accountEmail: () => 'user@example.com',
@@ -324,7 +327,7 @@ describe('the sync runner', () => {
     expect(box.client.calls.some((c) => c.op === 'createFile')).toBe(false)
   })
 
-  it('writes the backup copy inside the test directory', async () => {
+  it('writes the backup inside the test directory and nowhere else', async () => {
     const box = await harness()
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
@@ -332,6 +335,51 @@ describe('the sync runner', () => {
 
     const written = await readdir(join(box.dir, 'backup'))
     expect(written).toContain('manifest.json')
+    expect(box.dir).toContain('dm-runner-')
+    // Every copy the runner makes is inside the test's own directory. The
+    // backup path used to be a hardcoded `E:\.drive-mirror-backup\`, so
+    // every test run overwrote the user's own safety net.
+    expect(box.settings.backupPaths.every((p) => p.startsWith(box.dir))).toBe(true)
+  })
+
+  it('does not fail the sync when a backup copy cannot be written', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    // A file where the backup folder should be: the copy cannot be made.
+    await writeFile(join(box.dir, 'blocker'), 'not a folder')
+    box.settings.backupPaths = [join(box.dir, 'blocker', 'backup')]
+
+    const summary = await runner(box).syncNow()
+
+    // The mirror did its work.
+    expect(summary.uploaded).toBe(1)
+    expect(summary.errors).toBe(0)
+    expect(box.events.some((e) => e.type === 'finished')).toBe(true)
+    // And the user was told why the safety net was not refreshed.
+    expect(box.logs).toHaveLength(1)
+    expect(box.logs[0]).toContain(join(box.dir, 'blocker', 'backup'))
+  })
+
+  it('does not fail a rebase when a backup copy cannot be written', async () => {
+    const box = await harness()
+    await writeFile(join(box.dir, 'blocker'), 'not a folder')
+    box.settings.backupPaths = [join(box.dir, 'blocker', 'backup')]
+
+    await expect(runner(box).rebase('Medicine')).resolves.toBeUndefined()
+
+    expect(box.logs).toHaveLength(1)
+  })
+
+  it('writes a backup copy to every place the user keeps one', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    const second = join(box.dir, 'other-disk')
+    box.settings.backupPaths = [join(box.dir, 'backup'), second]
+
+    await runner(box).syncNow()
+
+    expect(await readdir(join(box.dir, 'backup'))).toContain('manifest.json')
+    expect(await readdir(second)).toContain('manifest.json')
   })
 })
 

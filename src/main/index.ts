@@ -276,6 +276,7 @@ if (!app.requestSingleInstanceLock()) {
       store,
       settings,
       emit,
+      log: (message: string) => logger.log({ level: 'warn', message }),
       hasCredentials: async () =>
         Boolean(credentialStore.getClientId()) && (await loadTokens()) !== null,
       accountEmail: () => null,

@@ -31,6 +31,7 @@ import { canon } from '../core/paths'
 import { diffMirror } from '../core/diff'
 import { executePlan, localDisplayName } from '../core/sync'
 import type { DiffIo, DriveTree, LocalTree, Manifest, MirrorManifest, Report } from '../core/types'
+import { MANIFEST_VERSION } from '../core/manifest'
 import type { ManifestStore } from '../core/manifest'
 import type { DriveClient } from '../drive/client'
 import type { Settings } from './settings'
@@ -67,6 +68,14 @@ export interface RunnerDeps {
   hasCredentials?: () => boolean | Promise<boolean>
   /** The signed-in account, when it is known. */
   accountEmail?: () => string | null
+  /**
+   * Where a message about the run that is not an error goes.
+   *
+   * A backup copy that could not be written is one of those: the run
+   * itself is fine, but the user should be able to find out that their
+   * safety net was not refreshed.
+   */
+  log?: (message: string) => void
 }
 
 /** The runner's public surface. */
@@ -413,7 +422,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
 
       await deps.store.checkpoint(manifest)
-      await writeBackup(deps.settings.backupPaths[0], manifest)
+      await writeBackups(deps.settings.backupPaths, manifest, deps.log)
     },
 
     async syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }) {
@@ -454,7 +463,7 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       summary.finishedAt = new Date().toISOString()
       await deps.store.checkpoint(manifest)
-      await writeBackup(deps.settings.backupPaths[0], manifest)
+      await writeBackups(deps.settings.backupPaths, manifest, deps.log)
 
       running.value = false
       phase.value = 'idle'
@@ -480,29 +489,62 @@ export function createRunner(deps: RunnerDeps): Runner {
 }
 
 /**
- * Keep a copy of the manifest outside the app's own directory.
+ * Write a copy of the manifest to every place the user keeps one.
  *
  * The manifest is the app's memory: without it, every file would look
- * deleted. A copy somewhere else means a damaged installation, a wiped
- * app directory, or a reinstall does not take that memory with it.
+ * deleted. The first copy sits beside the manifest itself, and the rest
+ * are the places the user names - usually a copy on another disk, which
+ * is the copy that survives a failure of the app's own disk.
  *
- * A failure here does not fail the run. The manifest was already written
- * where the app reads it.
+ * Writing a copy is best-effort. A copy that cannot be written is
+ * reported, the other copies are still written, and the run carries on:
+ * the manifest has already been written where the app reads it, and a
+ * mirror is a mirror whether or not its safety net could be refreshed.
+ *
+ * The copy carries the version this build writes, the same way the store
+ * stamps it. The version is the only thing the file tells a later build
+ * about the fields it carries.
  */
-async function writeBackup(
-  backupPath: string | undefined,
+export async function writeBackups(
+  paths: string[],
   manifest: Manifest,
-): Promise<void> {
-  if (!backupPath) return
+  log?: (message: string) => void,
+): Promise<{ written: string[]; failed: string[] }> {
+  const written: string[] = []
+  const failed: string[] = []
+  for (const path of paths) {
+    try {
+      await mkdir(path, { recursive: true })
+      await writeFile(join(path, 'manifest.json'), backupJson(manifest), 'utf8')
+      written.push(path)
+    } catch (err) {
+      failed.push(path)
+      note(
+        log,
+        `the backup copy at ${path} could not be written: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+    }
+  }
+  return { written, failed }
+}
+
+/** The manifest as a backup copy carries it. */
+function backupJson(manifest: Manifest): string {
+  return JSON.stringify({ ...manifest, version: MANIFEST_VERSION }, null, 2)
+}
+
+/**
+ * Say what happened, without letting the saying break the run.
+ *
+ * A logger that cannot be written is not a reason to fail a sync.
+ */
+function note(log: ((message: string) => void) | undefined, message: string): void {
   try {
-    await mkdir(backupPath, { recursive: true })
-    await writeFile(
-      join(backupPath, 'manifest.json'),
-      JSON.stringify(manifest, null, 2),
-      'utf8',
-    )
+    log?.(message)
   } catch {
-    // The backup is a convenience, not the record itself.
+    // The message is lost, and the run goes on.
   }
 }
 

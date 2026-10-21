@@ -13,7 +13,7 @@
  * - retired records are never pruned.
  */
 
-import { open, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { open, mkdir, readFile, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { canon } from './paths'
 import type {
@@ -243,9 +243,4 @@ export function createManifestStore(dir: string): ManifestStore {
       return result
     },
   }
-}
-
-/** Write a manifest with a fresh `updatedAt` and a trailing newline. */
-export async function writeManifestFile(path: string, m: Manifest): Promise<void> {
-  await writeFile(path, `${JSON.stringify(m, null, 2)}\n`, 'utf8')
 }
