@@ -18,10 +18,11 @@
 
 import { createHash } from 'node:crypto'
 import { createReadStream, statSync } from 'node:fs'
-import { readFile, rm, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, rm, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
+import { writeAtomic } from '../core/atomic'
 import { buildDriveTree, FOLDER_MIME } from '../core/driveTree'
 import { checkCountDrop, checkVolumeFingerprint, rebaseMirror } from '../core/guards'
 import { exportInfoFor } from '../core/googleMime'
@@ -31,7 +32,7 @@ import { canon } from '../core/paths'
 import { diffMirror } from '../core/diff'
 import { executePlan, localDisplayName } from '../core/sync'
 import type { DiffIo, DriveTree, LocalTree, Manifest, MirrorManifest, Report } from '../core/types'
-import { MANIFEST_VERSION } from '../core/manifest'
+import { serialiseManifest } from '../core/manifest'
 import type { ManifestStore } from '../core/manifest'
 import type { DriveClient } from '../drive/client'
 import type { Settings } from './settings'
@@ -501,9 +502,10 @@ export function createRunner(deps: RunnerDeps): Runner {
  * the manifest has already been written where the app reads it, and a
  * mirror is a mirror whether or not its safety net could be refreshed.
  *
- * The copy carries the version this build writes, the same way the store
- * stamps it. The version is the only thing the file tells a later build
- * about the fields it carries.
+ * The copy is written atomically, and it holds the same bytes the store
+ * writes - the same version stamp, the same formatting, the same trailing
+ * newline. A copy that is half written would be worse than no copy: the
+ * act of refreshing the safety net would destroy the previous good one.
  */
 export async function writeBackups(
   paths: string[],
@@ -512,10 +514,13 @@ export async function writeBackups(
 ): Promise<{ written: string[]; failed: string[] }> {
   const written: string[] = []
   const failed: string[] = []
+  if (paths.length === 0) {
+    note(log, 'no backup copy is configured, so the manifest has no safety net')
+  }
   for (const path of paths) {
     try {
       await mkdir(path, { recursive: true })
-      await writeFile(join(path, 'manifest.json'), backupJson(manifest), 'utf8')
+      await writeAtomic(join(path, 'manifest.json'), serialiseManifest(manifest))
       written.push(path)
     } catch (err) {
       failed.push(path)
@@ -528,11 +533,6 @@ export async function writeBackups(
     }
   }
   return { written, failed }
-}
-
-/** The manifest as a backup copy carries it. */
-function backupJson(manifest: Manifest): string {
-  return JSON.stringify({ ...manifest, version: MANIFEST_VERSION }, null, 2)
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRunner } from '../src/main/runner'
@@ -380,6 +380,19 @@ describe('the sync runner', () => {
 
     expect(await readdir(join(box.dir, 'backup'))).toContain('manifest.json')
     expect(await readdir(second)).toContain('manifest.json')
+  })
+
+  it('writes the backup as the same bytes as the manifest file', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+
+    await runner(box).syncNow()
+
+    // The backup is a copy of the manifest the app just wrote, byte for
+    // byte: a hand-diff of the two shows no differences.
+    const manifest = await readFile(box.manifestFile, 'utf8')
+    const backup = await readFile(join(box.dir, 'backup', 'manifest.json'), 'utf8')
+    expect(backup).toBe(manifest)
   })
 })
 

@@ -6,15 +6,16 @@
  * the app re-download every file the user ever deleted, so the store is
  * deliberately paranoid:
  *
- * - writes are atomic (temp file + fsync + rename), so a crash never leaves a
- *   half-written manifest;
+ * - writes are atomic (temp file + fsync + rename, in `atomic.ts`), so a
+ *   crash never leaves a half-written manifest;
  * - a journal records every completed operation, and the journal is fsynced,
  *   so operations after the last checkpoint can be replayed;
  * - retired records are never pruned.
  */
 
-import { open, mkdir, readFile, rename, rm } from 'node:fs/promises'
+import { mkdir, open, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { writeAtomic } from './atomic'
 import { canon } from './paths'
 import type {
   JournalOp,
@@ -28,7 +29,6 @@ import type {
 export const MANIFEST_VERSION = 11
 
 const MANIFEST_FILE = 'manifest.json'
-const MANIFEST_TMP = 'manifest.json.tmp'
 const JOURNAL_FILE = 'journal.ndjson'
 
 /** Durable storage for the manifest and its journal. */
@@ -133,27 +133,32 @@ export function applyManifestOp(m: MirrorManifest, op: ManifestOp): void {
   }
 }
 
+/**
+ * The manifest as it is written to a file.
+ *
+ * This is the one place the version stamp and the JSON formatting live, so
+ * the manifest the app reads and the copies the app keeps cannot drift
+ * apart: a hand-diff of a backup against the original shows no differences.
+ *
+ * The file carries the version of the schema it is written in. A manifest
+ * that was read from an older file is written back as the version this
+ * build writes; the mirrors, the files, the retired records and the counts
+ * in it are left exactly as they were.
+ */
+export function serialiseManifest(manifest: Manifest): string {
+  const copy: Manifest = { ...manifest, version: MANIFEST_VERSION }
+  return `${JSON.stringify(copy, null, 2)}\n`
+}
+
 /** Create a manifest store rooted at `dir`. */
 export function createManifestStore(dir: string): ManifestStore {
   const manifestPath = join(dir, MANIFEST_FILE)
-  const tmpPath = join(dir, MANIFEST_TMP)
   const journalPath = join(dir, JOURNAL_FILE)
 
-  async function writeAtomic(contents: string): Promise<void> {
+  /** Write the manifest file, atomically. */
+  async function saveManifestFile(contents: string): Promise<void> {
     await mkdir(dir, { recursive: true })
-    const handle = await open(tmpPath, 'w')
-    try {
-      await handle.writeFile(contents, 'utf8')
-      await handle.sync()
-    } finally {
-      await handle.close()
-    }
-    try {
-      await rename(tmpPath, manifestPath)
-    } catch (err) {
-      await rm(tmpPath, { force: true })
-      throw err
-    }
+    await writeAtomic(manifestPath, contents)
   }
 
   return {
@@ -177,21 +182,14 @@ export function createManifestStore(dir: string): ManifestStore {
     },
 
     async write(m: Manifest): Promise<void> {
-      // The file carries the version of the schema it is written in. A
-      // manifest that was read from an older file is written back as the
-      // version this build writes; the mirrors, the files, the retired
-      // records and the counts in it are left exactly as they were.
-      const copy: Manifest = {
-        ...m,
-        version: MANIFEST_VERSION,
-        updatedAt: new Date().toISOString(),
-      }
-      await writeAtomic(`${JSON.stringify(copy, null, 2)}\n`)
+      // The file carries a fresh `updatedAt`, and the version this build
+      // writes. Everything else in the manifest is left exactly as it was.
+      const copy: Manifest = { ...m, updatedAt: new Date().toISOString() }
+      await saveManifestFile(serialiseManifest(copy))
     },
 
     async checkpoint(m: Manifest): Promise<void> {
-      const copy: Manifest = { ...m, version: MANIFEST_VERSION }
-      await writeAtomic(`${JSON.stringify(copy, null, 2)}\n`)
+      await saveManifestFile(serialiseManifest(m))
     },
 
     async appendJournal(op: JournalOp): Promise<void> {

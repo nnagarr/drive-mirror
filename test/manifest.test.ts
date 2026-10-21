@@ -9,6 +9,7 @@ import {
   emptyMirror,
   buildIndexes,
   applyManifestOp,
+  serialiseManifest,
 } from '../src/core/manifest'
 import type { Manifest, RetiredRecord } from '../src/core/types'
 
@@ -145,6 +146,19 @@ describe('manifest store', () => {
     const read = await store.read()
     expect(read.mirrors['Medicine']?.root).toBe('E:\\Medicine')
     expect(existsSync(join(dir, 'manifest.json.tmp'))).toBe(false)
+  })
+
+  it('writes the manifest as serialiseManifest writes it', async () => {
+    const store = createManifestStore(dir)
+    const m = emptyManifest()
+
+    await store.checkpoint(m)
+
+    // The file and the serialiser are the same bytes, so a copy of the
+    // manifest written elsewhere cannot drift away from it.
+    const written = await readFile(join(dir, 'manifest.json'), 'utf8')
+    expect(written).toBe(serialiseManifest(m))
+    expect(written.endsWith('\n')).toBe(true)
   })
 
   it('round-trips every manifest field through JSON', async () => {
