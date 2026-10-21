@@ -1,0 +1,10 @@
+node_modules/
+out/
+dist/
+*.log
+
+# Never commit OAuth credentials
+*.client_secret*.json
+client_secret*.json
+.env
+.env.*
