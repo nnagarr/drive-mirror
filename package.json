@@ -30,5 +30,13 @@
   "allowScripts": {
     "electron": true,
     "electron-winstaller": true
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nnagarr/drive-mirror.git"
+  },
+  "author": {
+    "name": "nnagarr"
+  },
+  "homepage": "https://github.com/nnagarr/drive-mirror#readme"
 }

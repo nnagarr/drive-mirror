@@ -118,6 +118,11 @@ export function App(): JSX.Element {
       .getSettings()
       .then((loaded) => {
         setSettings(loaded)
+        if (!loaded.clientId) {
+          // The app cannot do anything without a client of its own, so
+          // the guide to getting one is the first thing a new user sees.
+          setWizardOpen(true)
+        }
         // A problem that happened while nobody was watching is waiting in
         // the settings. It is shown once, and then it is cleared.
         if (loaded.pendingNotice) {
@@ -291,6 +296,25 @@ export function App(): JSX.Element {
             />
           ))}
         </section>
+
+        {mirrors.length === 0 && (
+          <section className="empty">
+            <h2>Nothing is mirrored yet</h2>
+            <p>
+              Press <strong>Add a folder</strong> to mirror a folder on this computer up
+              to your Google Drive. Nothing is uploaded until you ask for it.
+            </p>
+            {!settings?.clientId && (
+              <p>
+                You will need a Google client id and secret before the app can do
+                anything.{' '}
+                <button type="button" className="link" onClick={() => setWizardOpen(true)}>
+                  Show me how
+                </button>
+              </p>
+            )}
+          </section>
+        )}
 
         {guard && (
           <GuardBanner

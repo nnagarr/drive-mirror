@@ -762,3 +762,23 @@ body {
   font-size: 0.75rem;
   flex: 1;
 }
+
+/* The empty screen, before anything has been mirrored. */
+.empty {
+  margin: 0 auto;
+  max-width: 34rem;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.empty h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  color: var(--text);
+}
+
+.empty p {
+  margin: 0 0 0.5rem;
+  line-height: 1.6;
+}
