@@ -10,27 +10,10 @@
  */
 
 import { canon, isRepresentableOnWindows } from './paths'
+import { FOLDER_MIME, isGoogleNativeMime } from './googleMime'
 import type { DriveFile, DriveNode, DriveTree } from './types'
 
-/** The Drive mime type for a folder. */
-export const FOLDER_MIME = 'application/vnd.google-apps.folder'
-
-/** Prefix shared by every Google-native (Workspace) file type. */
-const NATIVE_PREFIX = 'application/vnd.google-apps.'
-
-/**
- * True for a Google-native file (Docs, Sheets, Slides, Drawings, …).
- *
- * Native files cannot be downloaded with `alt=media`; they must be exported.
- *
- * A folder is excluded even though its mime type shares the
- * `application/vnd.google-apps.` prefix: a folder is not an exportable
- * document, and the only consumer of this predicate is the export planner.
- */
-export function isGoogleNativeMime(mimeType: string): boolean {
-  if (mimeType === FOLDER_MIME) return false
-  return mimeType.startsWith(NATIVE_PREFIX)
-}
+export { FOLDER_MIME, isGoogleNativeMime }
 
 /**
  * Build the `q` parameter for a Drive listing.
