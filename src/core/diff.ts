@@ -58,7 +58,16 @@ export type SyncAction =  | { kind: 'create-folder'; relPath: string }
       md5: string
       size: number
     }
-  | { kind: 'download'; relPath: string; localPath: string; driveFileId: string; size: number }
+  | {
+      kind: 'download'
+      relPath: string
+      localPath: string
+      driveFileId: string
+      size: number
+      /** The local copy has changes that the download would overwrite:
+       *  archive it first. */
+      archiveLocalFirst?: boolean
+    }
   | {
       kind: 'export-native'
       relPath: string
@@ -465,6 +474,8 @@ async function groupB(
               localPath: manifestEntry.localPath,
               driveFileId: driveFile.id,
               size: driveFile.size ?? 0,
+              // The local file has changes the download would overwrite.
+              archiveLocalFirst: true,
             },
             ops: [
               {
@@ -1211,6 +1222,39 @@ async function groupR(
       }
     }
 
+    // A local file with the same name. Under drive-wins the Drive copy is
+    // the surviving version of the work, so it is downloaded over the local
+    // file after the local bytes are archived.
+    if (driveWins) {
+      return {
+        step: {
+          action: {
+            kind: 'download',
+            relPath: path,
+            localPath: path,
+            driveFileId: driveFile.id,
+            size: driveFile.size ?? 0,
+            archiveLocalFirst: true,
+          },
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: liveEntryFor(
+                path,
+                driveFile,
+                path,
+                driveFile.md5 ?? null,
+                driveFile.size ?? 0,
+                localEntry?.mtimeMs ?? 0,
+              ),
+            },
+            release('resynced'),
+          ],
+        },
+      }
+    }
+
     // A local file with the same name. The local side wins, keeping the
     // Drive file id.
     return {
@@ -1301,6 +1345,9 @@ async function groupR(
             localPath: path,
             driveFileId: driveFile.id,
             size: driveFile.size ?? 0,
+            // The local file differs from the rebase baseline, so it holds
+            // work the download would overwrite.
+            archiveLocalFirst: true,
           },
           ops: [
             {

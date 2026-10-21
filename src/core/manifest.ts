@@ -126,6 +126,9 @@ export function applyManifestOp(m: MirrorManifest, op: ManifestOp): void {
     case 'del-retired':
       delete m.retired[op.id]
       return
+    case 'set-dir':
+      m.dirs[op.path] = { driveFolderId: op.driveFolderId }
+      return
   }
 }
 

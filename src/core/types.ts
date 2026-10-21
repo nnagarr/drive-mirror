@@ -153,6 +153,7 @@ export type ManifestOp =
   | { op: 'del-file'; path: string }
   | { op: 'set-retired'; id: string; record: RetiredRecord }
   | { op: 'del-retired'; id: string }
+  | { op: 'set-dir'; path: string; driveFolderId: string }
 
 /**
  * A journalled operation.
