@@ -43,6 +43,15 @@ export interface ProgressEvent {
   kind: SyncAction['kind']
   status: 'start' | 'done' | 'failed'
   message?: string
+  /** How many steps are finished, and how many there are in all. */
+  done: number
+  total: number
+}
+
+/** How far through a plan a run is. */
+export interface ProgressCounter {
+  done: number
+  total: number
 }
 
 /** What a run did. */
@@ -107,11 +116,18 @@ export async function executePlan(
 
   const mirrorName = basename(ctx.root)
 
+  // The steps that do something are the ones the progress bar counts.
+  // The steps that only record are bookkeeping and are counted out.
+  const counter: ProgressCounter = {
+    done: 0,
+    total: plan.steps.filter((step) => step.action).length,
+  }
+
   // The steps that act on Drive, grouped by phase.
   for (const { phase, kinds } of PHASES) {
     for (const step of plan.steps) {
       if (!step.action || !kinds.includes(step.action.kind)) continue
-      await runStep(step, phase, ctx, result, mirrorName)
+      await runStep(step, phase, ctx, result, mirrorName, counter)
     }
   }
 
@@ -133,6 +149,7 @@ async function runStep(
   ctx: ExecutorContext,
   result: SyncRunResult,
   mirrorName: string,
+  counter: ProgressCounter,
 ): Promise<void> {
   const action = step.action!
   ctx.onProgress?.({
@@ -140,6 +157,8 @@ async function runStep(
     relPath: action.relPath,
     kind: action.kind,
     status: 'start',
+    done: counter.done,
+    total: counter.total,
   })
 
   /** Manifest writes the step produced beyond its own ops. */
@@ -281,21 +300,27 @@ async function runStep(
           ? err.message
           : String(err)
     result.errors.push({ relPath: action.relPath, message })
+    counter.done += 1
     ctx.onProgress?.({
       phase,
       relPath: action.relPath,
       kind: action.kind,
       status: 'failed',
       message,
+      done: counter.done,
+      total: counter.total,
     })
     return
   }
 
+  counter.done += 1
   ctx.onProgress?.({
     phase,
     relPath: action.relPath,
     kind: action.kind,
     status: 'done',
+    done: counter.done,
+    total: counter.total,
   })
 
   await applyOps(step.ops, ctx, mirrorName, patch)

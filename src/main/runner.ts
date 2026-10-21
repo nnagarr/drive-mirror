@@ -354,8 +354,8 @@ export function createRunner(deps: RunnerDeps): Runner {
           mirror: config.name,
           relPath: event.relPath,
           phase: event.phase,
-          done: 0,
-          total: 0,
+          done: event.done,
+          total: event.total,
         })
       },
     })

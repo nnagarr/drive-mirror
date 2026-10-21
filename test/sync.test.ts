@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest'
+﻿import { describe, it, expect } from 'vitest'
 import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, writeFile, readdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { executePlan } from '../src/core/sync'
+import type { ProgressEvent } from '../src/core/sync'
 import { emptyMirror } from '../src/core/manifest'
 import { FakeDrive, FakeStore } from './helpers/fakeDrive'
 import type { SyncPlan, PlanStep } from '../src/core/diff'
@@ -647,3 +648,41 @@ describe('executePlan', () => {
     expect(downloaded?.dest).toContain('Scene.PSD')
   })
 })
+
+describe('the progress a run reports', () => {
+  it('counts the steps so the bar can move', async () => {
+    const box = await sandbox()
+    await localFile(box.root, 'renders/c.psd')
+    box.client.add('D1', 'a.psd')
+    box.client.add('D2', 'b.psd', { content: Buffer.from('drive bytes') })
+
+    const events: ProgressEvent[] = []
+    await executePlan(
+      plan([
+        {
+          action: {
+            kind: 'upload',
+            relPath: 'renders/c.psd',
+            localPath: 'renders/c.psd',
+            md5: 'm3',
+            size: 11,
+          },
+          ops: [],
+        },
+      ]),
+      {
+        client: box.client,
+        store: box.store,
+        manifest: box.manifest,
+        root: box.root,
+        archiveDir: box.archiveDir,
+        onProgress: (event) => events.push(event),
+      },
+    )
+
+    expect(events.length).toBeGreaterThan(0)
+    expect(events[0]!.total).toBe(1)
+    expect(events[events.length - 1]!.done).toBe(1)
+  })
+})
+
