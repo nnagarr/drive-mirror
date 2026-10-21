@@ -7,7 +7,7 @@
  * closes again. Nothing is exposed to the network.
  */
 
-import { app, BrowserWindow, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, Notification, powerMonitor, safeStorage, shell } from 'electron'
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -22,6 +22,8 @@ import type { Settings } from './settings'
 import { registerIpc } from './ipc'
 import { createMainWindow } from './window'
 import { createRunner } from './runner'
+import { createScheduler } from './scheduler'
+import { registerTask, taskExists, unregisterTask } from './taskScheduler'
 import type { AppEvent } from './ipc'
 import type { OAuthTokens } from '../drive/oauth'
 
@@ -129,6 +131,20 @@ async function currentSettings(): Promise<Settings> {
     clientId: credentialStore.getClientId() ?? settings.clientId,
     clientSecretSet: credentialStore.getClientSecret() !== null,
   }
+}
+
+/**
+ * Save part of the settings.
+ *
+ * The client id is not written to the settings file: it lives in the
+ * encrypted credential store, and the settings only say whether one is
+ * stored.
+ */
+async function saveSettings(patch: Partial<Settings>): Promise<Settings> {
+  const current = await currentSettings()
+  const next = { ...current, ...patch }
+  await settingsStore.write(next)
+  return next
 }
 
 /* ------------------------------------------------------------------ */
@@ -243,17 +259,33 @@ function waitForCode(
 /* The app                                                              */
 /* ------------------------------------------------------------------ */
 
-if (!app.requestSingleInstanceLock()) {
+/**
+ * Whether this launch is the Windows task doing one sync and leaving.
+ *
+ * A scheduled launch must **not** take the single-instance lock. The lock
+ * is what makes a second launch quit, and a scheduled run must not quit
+ * just because the window happens to be open. The lock *file*, not the
+ * instance lock, is what stops two runs at once.
+ */
+const syncOnce = process.argv.includes('--sync-once')
+
+if (!syncOnce && !app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.focus()
-    }
-  })
+  if (!syncOnce) {
+    app.on('second-instance', () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore()
+        mainWindow.focus()
+      }
+    })
+  }
 
   void app.whenReady().then(async () => {
+    // Windows shows a toast with the app's name and icon only when the
+    // app has an id of its own.
+    app.setAppUserModelId('com.drivemirror.app')
+
     // The credentials can come from the environment, which is how the
     // smoke test signs in without anyone typing a secret into a window.
     if (!credentialStore.getClientId()) {
@@ -313,15 +345,35 @@ if (!app.requestSingleInstanceLock()) {
       },
     })
 
+    const scheduler = createScheduler({
+      settings: () => currentSettings(),
+      saveSettings,
+      runSync: () => runner.syncNow(),
+      now: () => new Date(),
+      registerTask,
+      unregisterTask,
+      taskExists,
+      // The executable the Windows task launches. In development this is
+      // Electron's own binary, which is why the task is only for the
+      // packaged app.
+      exePath: () => app.getPath('exe'),
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+      onResume: (fn) => {
+        powerMonitor.on('resume', fn)
+        return () => powerMonitor.off('resume', fn)
+      },
+      notify: (title, body) => {
+        if (Notification.isSupported()) {
+          new Notification({ title, body }).show()
+        }
+      },
+    })
+
     registerIpc({
       runner,
       getSettings: () => currentSettings(),
-      async saveSettings(patch) {
-        const current = await currentSettings()
-        const next = { ...current, ...patch }
-        await settingsStore.write(next)
-        return next
-      },
+      saveSettings,
       async setCredentials(clientId, clientSecret) {
         try {
           await credentialStore.setCredentials(clientId, clientSecret)
@@ -354,11 +406,24 @@ if (!app.requestSingleInstanceLock()) {
       },
     })
 
+    if (syncOnce) {
+      // The Windows task's launch: one sync, no window, then out. The
+      // scheduler records when the run happened, so the next slot is
+      // measured from this one.
+      await scheduler.runNow()
+      app.quit()
+      return
+    }
+
     mainWindow = createMainWindow()
 
     // Fill in the file counts so the window shows the real trees before
     // the first run.
     await runner.prime()
+
+    // The schedule starts last, so a run that was missed while the app
+    // was closed happens after the window is up and can say so.
+    await scheduler.start()
   })
 
   app.on('window-all-closed', () => {
