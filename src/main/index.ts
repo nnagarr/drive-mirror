@@ -16,6 +16,7 @@ import { createDriveClient } from '../drive/httpClient'
 import { buildAuthUrl, exchangeCode, refreshAccessToken } from '../drive/oauth'
 import { createLogger } from '../core/logger'
 import { createManifestStore } from '../core/manifest'
+import { mirrorConfigsFromManifest } from '../core/mirrorConfig'
 import { appDataDir, createCredentialStore, createSettingsStore } from './settings'
 import type { Settings } from './settings'
 import { registerIpc } from './ipc'
@@ -271,11 +272,30 @@ if (!app.requestSingleInstanceLock()) {
     // The store keeps the manifest in the directory that holds it, which
     // is the one the settings show the user.
     const store = createManifestStore(appDataDir())
+
+    // The mirrors are configuration, and the configuration lives in the
+    // settings. An app that has synced before already knows them: the
+    // manifest holds the names and the roots, and they are recovered from
+    // it once, so an upgrade does not hand the user four broken mirrors
+    // and a fresh install starts with an empty list.
+    if (settings.mirrors.length === 0) {
+      const manifest = await store.read()
+      const recovered = mirrorConfigsFromManifest(manifest)
+      if (recovered.length > 0) {
+        await settingsStore.patch({ mirrors: recovered })
+      }
+    }
+
     const runner = createRunner({
       client,
       store,
-      settings,
+      // The settings are read when a run starts, so a folder the user adds
+      // while the app is open is mirrored by the next run.
+      settings: () => currentSettings(),
       emit,
+      // The lock that stops a scheduled run and this window from writing
+      // the manifest at the same time.
+      lockPath: join(appDataDir(), 'sync.lock'),
       log: (message: string) => logger.log({ level: 'warn', message }),
       hasCredentials: async () =>
         Boolean(credentialStore.getClientId()) && (await loadTokens()) !== null,
@@ -307,13 +327,16 @@ if (!app.requestSingleInstanceLock()) {
         await shell.openPath(join(appDataDir(), 'logs'))
       },
       async showManifest() {
-        await shell.openPath(settings.manifestPath)
+        const current = await currentSettings()
+        await shell.openPath(current.manifestPath)
       },
       async revealSuperseded() {
-        await shell.openPath(settings.supersededPath)
+        const current = await currentSettings()
+        await shell.openPath(current.supersededPath)
       },
       async pruneSuperseded() {
-        return pruneSuperseded(settings.supersededPath)
+        const current = await currentSettings()
+        return pruneSuperseded(current.supersededPath)
       },
       onError: (message: string) => {
         emit({ type: 'error', message })

@@ -78,7 +78,10 @@ export interface IpcDeps {
  * agree, and the preload script is the only thing the interface can reach.
  */
 export function registerIpc(deps: IpcDeps): void {
-  ipcMain.handle('drive-mirror:get-state', () => deps.runner.state())
+  // The state is built from the settings every time it is asked for, so a
+  // folder the user has just added is in it at once. The preload already
+  // hands the renderer a promise.
+  ipcMain.handle('drive-mirror:get-state', async () => await deps.runner.state())
 
   ipcMain.handle('drive-mirror:sync-now', async (_event, mirrorName?: string) => {
     try {

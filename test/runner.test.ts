@@ -1,13 +1,21 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtemp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, mkdir, readdir, readFile, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createRunner } from '../src/main/runner'
+import {
+  acquireSyncLock,
+  createRunner,
+  driveLetterOf,
+  releaseSyncLock,
+} from '../src/main/runner'
 import { createManifestStore } from '../src/core/manifest'
 import { FakeDrive } from './helpers/fakeDrive'
 import { defaultSettings } from '../src/main/settings'
 import type { AppEvent } from '../src/main/ipc'
-import type { Manifest } from '../src/core/types'
+import type { DriveNode, Manifest } from '../src/core/types'
+import type { DriveClient } from '../src/drive/client'
+import type { Settings } from '../src/main/settings'
 
 /** A mirror folder on the fake Drive. */
 const MIRROR_FOLDER_ID = 'FOLDER_MED'
@@ -21,8 +29,10 @@ interface Harness {
   events: AppEvent[]
   logs: string[]
   store: ReturnType<typeof createManifestStore>
-  settings: ReturnType<typeof defaultSettings>
+  settings: Settings
   manifestFile: string
+  /** Where the runner's lock file lives. */
+  lockPath: string
 }
 
 /** A sandbox with a mirror root and a Drive folder for it. */
@@ -48,6 +58,16 @@ async function harness(
     await store.write(options.manifest)
   }
 
+  const settings: Settings = {
+    ...defaultSettings(),
+    manifestPath: manifestFile,
+    supersededPath: join(dir, 'superseded'),
+    // The backup copy stays inside the test's own directory.
+    backupPaths: [join(dir, 'backup')],
+    // The mirrors are configuration: the settings say what is mirrored.
+    mirrors: [{ name: 'Medicine', root, drivePath: 'Medicine', enabled: true }],
+  }
+
   return {
     dir,
     root,
@@ -55,29 +75,43 @@ async function harness(
     events: [],
     logs: [],
     store,
-    settings: {
-      ...defaultSettings(),
-      manifestPath: manifestFile,
-      supersededPath: join(dir, 'superseded'),
-      // The backup copy stays inside the test's own directory.
-      backupPaths: [join(dir, 'backup')],
-    },
+    settings,
     manifestFile,
+    lockPath: join(dir, 'sync.lock'),
   }
 }
 
 /** The runner under test. */
-function runner(box: Harness) {
+function runner(box: Harness, options: { client?: DriveClient } = {}) {
   return createRunner({
-    client: box.client,
+    client: options.client ?? box.client,
     store: box.store,
-    settings: box.settings,
+    settings: async () => box.settings,
     emit: (event) => box.events.push(event),
     log: (message) => box.logs.push(message),
-    mirrors: [{ name: 'Medicine', root: box.root }],
+    lockPath: box.lockPath,
     hasCredentials: () => true,
     accountEmail: () => 'user@example.com',
   })
+}
+
+/**
+ * A Drive whose folder listing fails.
+ *
+ * It fails once, so a test can see both what a failed run does to the app
+ * and what the run after it does.
+ */
+class BrokenDrive extends FakeDrive {
+  /** How many more listings should fail. */
+  broken = 1
+
+  override async listChildren(folderId: string): Promise<DriveNode[]> {
+    if (this.broken > 0) {
+      this.broken -= 1
+      throw new Error('boom')
+    }
+    return super.listChildren(folderId)
+  }
 }
 
 describe('the sync runner', () => {
@@ -136,16 +170,9 @@ describe('the sync runner', () => {
 
   it('skips a mirror whose root is missing and reports it', async () => {
     const box = await harness()
-    const missing = join(box.dir, 'not-there')
+    box.settings.mirrors[0]!.root = join(box.dir, 'not-there')
 
-    const summary = await createRunner({
-      client: box.client,
-      store: box.store,
-      settings: box.settings,
-      emit: (event) => box.events.push(event),
-      mirrors: [{ name: 'Medicine', root: missing }],
-      hasCredentials: () => true,
-    }).syncNow()
+    const summary = await runner(box).syncNow()
 
     expect(summary.errors).toBe(0)
     const guard = box.events.find((e) => e.type === 'guard')
@@ -320,7 +347,7 @@ describe('the sync runner', () => {
     const app = runner(box)
     await app.prime()
 
-    const state = app.state()
+    const state = await app.state()
     const card = state.mirrors.find((m) => m.name === 'Medicine')
     expect(card?.fileCount).toBe(2)
     // Nothing was written to Drive.
@@ -393,6 +420,171 @@ describe('the sync runner', () => {
     const manifest = await readFile(box.manifestFile, 'utf8')
     const backup = await readFile(join(box.dir, 'backup', 'manifest.json'), 'utf8')
     expect(backup).toBe(manifest)
+  })
+
+  it('runs once when two syncs are asked for at the same time', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+
+    const app = runner(box)
+    const [a, b] = await Promise.all([app.syncNow(), app.syncNow()])
+
+    expect(a.uploaded).toBe(1)
+    expect(b.uploaded).toBe(1)
+    // The file was uploaded once, not twice. Two runs that read the
+    // manifest at the same time would both see it as new, and the second
+    // one would win the manifest.
+    expect(box.client.calls.filter((c) => c.op === 'createFile')).toHaveLength(1)
+  })
+
+  it('does not stay stuck on syncing after a failure', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+
+    const app = runner(box, { client: new BrokenDrive() })
+    await expect(app.syncNow()).rejects.toThrow('boom')
+
+    const state = await app.state()
+    expect(state.running).toBe(false)
+    expect(state.phase).toBe('idle')
+
+    // And the next run is not blocked by the failed one.
+    const second = await app.syncNow()
+    expect(second.uploaded).toBe(1)
+  })
+
+  it('syncs a folder that was added while the app was running', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    const photos = join(box.dir, 'Photos')
+    await mkdir(photos, { recursive: true })
+    await writeFile(join(photos, 'b.psd'), 'local bytes')
+
+    const app = runner(box)
+    // The user adds a folder in the interface.
+    box.settings.mirrors.push({
+      name: 'Photos',
+      root: photos,
+      drivePath: 'Photos',
+      enabled: true,
+    })
+
+    const summary = await app.syncNow()
+
+    expect(summary.mirrors.map((m) => m.name)).toEqual(['Medicine', 'Photos'])
+    expect(summary.uploaded).toBe(2)
+  })
+
+  it('shows a card for a folder that was added while the app was running', async () => {
+    const box = await harness()
+    const photos = join(box.dir, 'Photos')
+
+    const app = runner(box)
+    box.settings.mirrors.push({
+      name: 'Photos',
+      root: photos,
+      drivePath: 'Photos',
+      enabled: true,
+    })
+
+    const state = await app.state()
+
+    expect(state.mirrors.map((m) => m.name)).toEqual(['Medicine', 'Photos'])
+    expect(state.mirrors[1]?.localRoot).toBe(photos)
+  })
+
+  it('does not sync a mirror that is paused', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    box.settings.mirrors[0]!.enabled = false
+
+    const summary = await runner(box).syncNow()
+
+    expect(summary.uploaded).toBe(0)
+    expect(summary.mirrors).toEqual([])
+  })
+
+  it('does not sync a mirror the user removed', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    box.settings.mirrors[0]!.removedAt = new Date().toISOString()
+
+    const summary = await runner(box).syncNow()
+
+    expect(summary.uploaded).toBe(0)
+    expect(summary.mirrors).toEqual([])
+  })
+
+  it('reports no drive letter for a UNC path instead of guessing one', () => {
+    expect(driveLetterOf('\\\\server\\share\\Docs')).toBeNull()
+    expect(driveLetterOf('E:\\Docs')).toBe('E:')
+    expect(driveLetterOf('c:\\Docs')).toBe('C:')
+  })
+
+  it('syncs a folder whose path has no drive letter, and records no volume', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    // The same folder, reached through the extended-length path: it has
+    // no drive letter, so there is no volume to check.
+    box.settings.mirrors[0]!.root = '\\\\?\\' + box.root
+
+    const summary = await runner(box).syncNow()
+
+    expect(summary.uploaded).toBe(1)
+    const after = await box.store.read()
+    expect(Object.keys(after.volumes)).toEqual([])
+  })
+
+  it('takes the lock once and refuses the second', async () => {
+    const box = await harness()
+
+    expect(await acquireSyncLock(box.lockPath, new Date())).toBe(true)
+    expect(await acquireSyncLock(box.lockPath, new Date())).toBe(false)
+
+    await releaseSyncLock(box.lockPath)
+    expect(await acquireSyncLock(box.lockPath, new Date())).toBe(true)
+    await releaseSyncLock(box.lockPath)
+  })
+
+  it('takes over a lock that is more than six hours old', async () => {
+    const box = await harness()
+    await writeFile(box.lockPath, 'held by a run that is long gone')
+    const old = new Date(Date.now() - 7 * 60 * 60 * 1000)
+    await utimes(box.lockPath, old, old)
+
+    expect(await acquireSyncLock(box.lockPath, new Date())).toBe(true)
+    await releaseSyncLock(box.lockPath)
+  })
+
+  it('does not run while another process holds the lock', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    // Another process is syncing right now.
+    await writeFile(box.lockPath, 'held')
+
+    const summary = await runner(box).syncNow()
+
+    expect(summary.uploaded).toBe(0)
+    expect(box.client.calls.some((c) => c.op === 'createFile')).toBe(false)
+    expect(box.logs.join('\n')).toContain('another sync was already running')
+  })
+
+  it('takes the lock for the run and gives it back afterwards', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+
+    await runner(box).syncNow()
+
+    expect(existsSync(box.lockPath)).toBe(false)
+  })
+
+  it('gives the lock back when the run fails', async () => {
+    const box = await harness()
+
+    const app = runner(box, { client: new BrokenDrive() })
+    await expect(app.syncNow()).rejects.toThrow('boom')
+
+    expect(existsSync(box.lockPath)).toBe(false)
   })
 })
 

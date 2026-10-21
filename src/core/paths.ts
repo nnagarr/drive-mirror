@@ -38,7 +38,8 @@ const ILLEGAL_FILENAME_CHARS = /[:*?"<>|]/
  *
  * False for names containing `: * ? " < > |`, names ending in a dot or a
  * space, and reserved device names. A Drive file whose name fails this test
- * can never be mirrored into `E:` and is treated as inert by the sync engine.
+ * can never be mirrored onto this computer and is treated as inert by the
+ * sync engine.
  */
 export function isRepresentableOnWindows(name: string): boolean {
   if (ILLEGAL_FILENAME_CHARS.test(name)) return false

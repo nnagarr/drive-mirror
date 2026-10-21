@@ -14,13 +14,26 @@
  * previous file counts, so the next run compares against the same baseline
  * and trips again. Only a run that completed - including one the user
  * explicitly overrode - updates them.
+ *
+ * Two locks stand in front of a run. The first is in this process: a second
+ * "Sync now" while a run is going joins the run that is already happening
+ * instead of starting a second one, because two runs that read the manifest
+ * at the same time would both write it and the last writer would win. The
+ * second is a file on disk, so a scheduled run in its own process and the
+ * window the user is looking at cannot write the manifest at the same time
+ * either. Both locks are released when the run ends, and a run that fails
+ * releases them too.
+ *
+ * The settings are read when a run starts, not when the app starts. A
+ * folder the user adds in the interface is mirrored by the next run, with
+ * no restart in between.
  */
 
 import { createHash } from 'node:crypto'
 import { createReadStream, statSync } from 'node:fs'
-import { readFile, rm, mkdir } from 'node:fs/promises'
+import { mkdir, open, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { writeAtomic } from '../core/atomic'
 import { buildDriveTree, FOLDER_MIME } from '../core/driveTree'
@@ -31,40 +44,48 @@ import { buildClaimIndex, planExportPaths } from '../core/claims'
 import { canon } from '../core/paths'
 import { diffMirror } from '../core/diff'
 import { executePlan, localDisplayName } from '../core/sync'
-import type { DiffIo, DriveTree, LocalTree, Manifest, MirrorManifest, Report } from '../core/types'
-import { serialiseManifest } from '../core/manifest'
+import type {
+  DiffIo,
+  DriveTree,
+  LocalTree,
+  Manifest,
+  MirrorManifest,
+  Report,
+} from '../core/types'
+import { emptyMirror, serialiseManifest } from '../core/manifest'
 import type { ManifestStore } from '../core/manifest'
+import type { MirrorConfig } from '../core/mirrorConfig'
 import type { DriveClient } from '../drive/client'
+import { appDataDir } from './settings'
 import type { Settings } from './settings'
 import type { AppEvent, AppState, MirrorCard, RunSummary } from './ipc'
 
-/** One of the trees being mirrored. */
-export interface MirrorSpec {
-  /** The name of the folder on Drive, and of the tree on disk. */
-  name: string
-  /** The local root. */
-  root: string
-}
-
-/** The trees the user asked for. */
-export const DEFAULT_MIRRORS: MirrorSpec[] = [
-  { name: 'Medicine', root: 'E:\\Medicine' },
-  { name: 'graphicDesign', root: 'E:\\graphicDesign' },
-  { name: 'videoEditing', root: 'E:\\videoEditing' },
-  { name: 'whoami', root: 'E:\\whoami' },
-]
-
 /** The id of the user's Drive root folder. */
 export const MY_DRIVE_ID = 'root'
+
+/** How long a lock file may be old before it is treated as stale. */
+const LOCK_STALE_MS = 6 * 60 * 60 * 1000
 
 /** What the runner needs from the outside world. */
 export interface RunnerDeps {
   client: DriveClient
   store: ManifestStore
-  settings: Settings
+  /**
+   * The settings as they are now.
+   *
+   * A getter, not a value: the user can add a folder, pause a mirror or
+   * change a destination while the app is running, and the next run must
+   * see it without a restart.
+   */
+  settings: () => Promise<Settings>
   emit: (event: AppEvent) => void
-  /** The trees to mirror. Defaults to the four the user asked for. */
-  mirrors?: MirrorSpec[]
+  /**
+   * Where the lock file lives.
+   *
+   * The lock is what stops a scheduled run and the window from writing the
+   * manifest at the same time. It sits with the app's other files.
+   */
+  lockPath?: string
   /** Whether the app holds usable credentials. */
   hasCredentials?: () => boolean | Promise<boolean>
   /** The signed-in account, when it is known. */
@@ -82,7 +103,7 @@ export interface RunnerDeps {
 /** The runner's public surface. */
 export interface Runner {
   syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }): Promise<RunSummary>
-  state(): AppState
+  state(): Promise<AppState>
   /** Fill in the file counts without syncing anything. */
   prime(): Promise<void>
   /**
@@ -113,24 +134,15 @@ function noCounts(): Counts {
  * Create the runner.
  */
 export function createRunner(deps: RunnerDeps): Runner {
-  const mirrors = deps.mirrors ?? DEFAULT_MIRRORS
   const cards = new Map<string, MirrorCard>()
   const lastRun: { value: RunSummary | null } = { value: null }
   const running = { value: false }
   const phase = { value: 'idle' }
+  /** The run that is going, when there is one. */
+  let inFlight: Promise<RunSummary> | null = null
+  const lockPath = deps.lockPath ?? defaultLockPath()
 
-  for (const mirror of mirrors) {
-    cards.set(mirror.name, {
-      name: mirror.name,
-      localRoot: mirror.root,
-      drivePath: `My Drive/${mirror.name}`,
-      fileCount: 0,
-      lastSyncedAt: null,
-      status: 'idle',
-      counts: noCounts(),
-    })
-  }
-
+  /** The card for a mirror, created when it is not known yet. */
   function card(name: string): MirrorCard {
     const existing = cards.get(name)
     if (existing) return existing
@@ -155,43 +167,64 @@ export function createRunner(deps: RunnerDeps): Runner {
     auth.email = deps.accountEmail?.() ?? null
   }
 
+  /**
+   * The state of the app, as the interface sees it.
+   *
+   * The mirrors come from the settings, which are the source of truth; the
+   * cards are only what the last run learned about them. A mirror the user
+   * added a moment ago therefore has a card at once.
+   */
+  function buildState(settings: Settings): AppState {
+    return {
+      mirrors: configuredMirrors(settings).map((config) => {
+        const mirrorCard = card(config.name)
+        mirrorCard.localRoot = config.root
+        mirrorCard.drivePath = `My Drive/${config.drivePath}`
+        return { ...mirrorCard }
+      }),
+      running: running.value,
+      phase: phase.value,
+      lastRun: lastRun.value,
+      accountEmail: auth.email,
+      needsAuth: !auth.signedIn,
+    }
+  }
+
   function emitState(): void {
-    void refreshAuth().then(() => {
-      deps.emit({
-        type: 'state',
-        state: {
-          mirrors: [...cards.values()],
-          running: running.value,
-          phase: phase.value,
-          lastRun: lastRun.value,
-          accountEmail: auth.email,
-          needsAuth: !auth.signedIn,
-        },
-      })
-    })
+    void (async () => {
+      try {
+        await refreshAuth()
+        const settings = await deps.settings()
+        deps.emit({ type: 'state', state: buildState(settings) })
+      } catch {
+        // The state event is a picture of the app for the interface. A
+        // failure to draw it must not take the run down with it.
+      }
+    })()
   }
 
   /**
    * Run one mirror.
    */
   async function runMirror(
-    spec: MirrorSpec,
+    config: MirrorConfig,
     manifest: Manifest,
     overrideGuard: boolean,
+    settings: Settings,
   ): Promise<{ counts: Counts; changed: Array<{ mirror: string; relPath: string; action: string }>; reports: Report[]; skipped: boolean }> {
     const changed: Array<{ mirror: string; relPath: string; action: string }> = []
     const reports: Report[] = []
     const counts = noCounts()
-    const mirrorCard = card(spec.name)
+    const mirrorCard = card(config.name)
 
-    const mirrorManifest = manifest.mirrors[spec.name] ?? emptyManifestFor(spec.root)
+    const mirrorManifest = manifest.mirrors[config.name] ?? emptyMirror(config.root)
 
     // --- Guard 1: the local root must exist -------------------------
     let rootStat: ReturnType<typeof statSync>
     try {
-      rootStat = statSync(spec.root)
+      rootStat = statSync(config.root)
     } catch {
-      skipMirror(spec.name, 'missing-root', `the folder ${spec.root} does not exist`, false)
+      skipMirror(config.name, 'missing-root', `the folder ${config.root} does not exist`, false)
       return { counts, changed, reports, skipped: true }
     }
 
@@ -200,33 +233,39 @@ export function createRunner(deps: RunnerDeps): Runner {
     // volume it was, and the mirror's own root must be on that volume.
     // A reassigned drive letter or a swapped disk would otherwise look
     // exactly like "every file was deleted".
-    const driveLetter = driveLetterOf(spec.root)
-    const recorded = manifest.volumes[driveLetter]
-    const driveDev = volumeDevOf(driveLetter)
+    //
+    // A path with no drive letter - a UNC share, say - has no letter to
+    // check, so there is nothing to compare and the root's own device is
+    // all there is.
+    const driveLetter = driveLetterOf(config.root)
+    if (driveLetter) {
+      const driveDev = volumeDevOf(driveLetter)
 
-    // 1. The drive letter must still be the volume it was. A reassigned
-    //    letter or a swapped disk changes the serial.
-    if (checkVolumeFingerprint(recorded, { dev: driveDev ?? rootStat.dev })) {
-      skipMirror(
-        spec.name,
-        'volume-changed',
-        `the drive ${driveLetter} is now a different volume, so the files on it are not the ones that were mirrored`,
-        true,
-      )
-      return { counts, changed, reports, skipped: true }
-    }
+      // 1. The drive letter must still be the volume it was. A reassigned
+      //    letter or a swapped disk changes the serial.
+      const recorded = manifest.volumes[driveLetter]
+      if (checkVolumeFingerprint(recorded, { dev: driveDev ?? rootStat.dev })) {
+        skipMirror(
+          config.name,
+          'volume-changed',
+          `the drive ${driveLetter} is now a different volume, so the files on it are not the ones that were mirrored`,
+          true,
+        )
+        return { counts, changed, reports, skipped: true }
+      }
 
-    // 2. The mirror's own root must be on that drive. A folder that has
-    //    become a junction to another disk would otherwise look like
-    //    every file was deleted.
-    if (driveDev !== null && driveDev !== rootStat.dev) {
-      skipMirror(
-        spec.name,
-        'volume-changed',
-        `the folder ${spec.root} is on a different volume from the drive ${driveLetter}`,
-        true,
-      )
-      return { counts, changed, reports, skipped: true }
+      // 2. The mirror's own root must be on that drive. A folder that has
+      //    become a junction to another disk would otherwise look like
+      //    every file was deleted.
+      if (driveDev !== null && driveDev !== rootStat.dev) {
+        skipMirror(
+          config.name,
+          'volume-changed',
+          `the folder ${config.root} is on a different volume from the drive ${driveLetter}`,
+          true,
+        )
+        return { counts, changed, reports, skipped: true }
+      }
     }
 
     // The scan tells us what is on disk, and how many files each folder
@@ -236,19 +275,19 @@ export function createRunner(deps: RunnerDeps): Runner {
       ...Object.values(mirrorManifest.files).map((entry) => entry.localPath),
       ...Object.values(mirrorManifest.retired).map((record) => record.path),
     ]
-    const local = await scanLocal({ root: spec.root, knownPaths })
+    const local = await scanLocal({ root: config.root, knownPaths })
 
-    // --- Guard 3: no folder may have lost more than half its files --
+    // --- Guard 3: no folder may have lost more than half its files ---
     if (!overrideGuard) {
       const hits = checkCountDrop(
         mirrorManifest.lastCounts,
         local.recursiveCounts,
-        deps.settings.guardThreshold,
+        settings.guardThreshold,
       )
       if (hits.length > 0) {
         const where = hits.map((hit) => hit.dir || 'the root').join(', ')
         skipMirror(
-          spec.name,
+          config.name,
           'count-drop',
           `the number of files fell by more than half in: ${where}`,
           true,
@@ -259,12 +298,12 @@ export function createRunner(deps: RunnerDeps): Runner {
 
     // --- Guard 4: resolve the Drive folder ---------------------------
     phase.value = 'folders'
-    const folderId = await resolveMirrorFolder(deps.client, spec.name)
+    const folderId = await resolveMirrorFolder(deps.client, config.name)
     if (folderId === null) {
       skipMirror(
-        spec.name,
+        config.name,
         'ambiguous-folder',
-        `more than one folder called ${spec.name} exists on Drive`,
+        `more than one folder called ${config.name} exists on Drive`,
         false,
       )
       return { counts, changed, reports, skipped: true }
@@ -285,10 +324,10 @@ export function createRunner(deps: RunnerDeps): Runner {
 
     // A folder that exists on disk but not on Drive is created, parents
     // first, so an empty folder is mirrored as an empty folder.
-    await createMissingFolders(deps.client, spec.root, local, mirrorManifest, folderId)
+    await createMissingFolders(deps.client, config.root, local, mirrorManifest, folderId)
 
     // --- The plan ----------------------------------------------------
-    const io = buildIo(deps.client, spec.root, drive)
+    const io = buildIo(deps.client, config.root, drive)
     const exportPlan = planExportPaths(drive, mirrorManifest, local)
     buildClaimIndex(mirrorManifest, exportPlan, drive)
 
@@ -307,12 +346,12 @@ export function createRunner(deps: RunnerDeps): Runner {
       client: deps.client,
       store: deps.store,
       manifest: mirrorManifest,
-      root: spec.root,
-      archiveDir: deps.settings.supersededPath,
+      root: config.root,
+      archiveDir: settings.supersededPath,
       onProgress: (event) => {
         deps.emit({
           type: 'progress',
-          mirror: spec.name,
+          mirror: config.name,
           relPath: event.relPath,
           phase: event.phase,
           done: 0,
@@ -331,7 +370,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     for (const step of plan.steps) {
       if (step.action) {
         changed.push({
-          mirror: spec.name,
+          mirror: config.name,
           relPath: step.action.relPath,
           action: step.action.kind,
         })
@@ -350,11 +389,15 @@ export function createRunner(deps: RunnerDeps): Runner {
     mirrorManifest.lastCounts = merged
     mirrorManifest.lastSyncAt = new Date().toISOString()
 
-    manifest.volumes[driveLetter] = {
-      dev: rootStat.dev,
-      checkedAt: new Date().toISOString(),
+    // The volume is only remembered when the path has a drive letter.
+    // There is no letter to key it by otherwise.
+    if (driveLetter) {
+      manifest.volumes[driveLetter] = {
+        dev: rootStat.dev,
+        checkedAt: new Date().toISOString(),
+      }
     }
-    manifest.mirrors[spec.name] = mirrorManifest
+    manifest.mirrors[config.name] = mirrorManifest
 
     mirrorCard.status = 'idle'
     mirrorCard.fileCount = local.recursiveCounts[''] ?? 0
@@ -381,61 +424,36 @@ export function createRunner(deps: RunnerDeps): Runner {
     })
   }
 
-  const runner: Runner = {
-    async prime(): Promise<void> {
-      const manifest = await deps.store.read()
-      for (const spec of mirrors) {
-        const mirrorCard = card(spec.name)
-        mirrorCard.localRoot = spec.root
-        mirrorCard.drivePath = `My Drive/${spec.name}`
-        const mirrorManifest = manifest.mirrors[spec.name]
-        mirrorCard.lastSyncedAt = mirrorManifest?.lastSyncAt ?? null
-        try {
-          const local = await scanLocal({ root: spec.root, knownPaths: [] })
-          mirrorCard.fileCount = local.recursiveCounts[''] ?? 0
-        } catch {
-          // The folder is not there. A run will say so.
-        }
-      }
-      emitState()
-    },
+  /**
+   * The run itself, without the in-process lock.
+   *
+   * The lock file is taken first and given back in the `finally`, so a run
+   * that fails does not leave the next one waiting for a lock nobody
+   * holds.
+   */
+  async function runSync(
+    mirrorName?: string,
+    options?: { overrideGuard?: boolean },
+  ): Promise<RunSummary> {
+    const locked = await acquireSyncLock(lockPath, new Date())
+    if (!locked) {
+      note(deps.log, 'another sync was already running, so this run was skipped')
+      return emptySummary()
+    }
 
-    async rebase(mirrorName: string): Promise<void> {
-      const manifest = await deps.store.read()
-      const spec = mirrors.find((m) => m.name === mirrorName)
-      if (!spec) return
-
-      const mirrorManifest = manifest.mirrors[mirrorName] ?? emptyManifestFor(spec.root)
-
-      // The live entries describe the OLD volume. They become retired
-      // records, so the engine can later tell "the same file came back"
-      // from "a different file took its place".
-      manifest.mirrors[mirrorName] = rebaseMirror(mirrorManifest, new Date().toISOString())
-
-      // The new volume's serial is what is recorded from now on.
-      const driveLetter = driveLetterOf(spec.root)
-      const dev = volumeDevOf(driveLetter)
-      if (dev !== null) {
-        manifest.volumes[driveLetter] = {
-          dev,
-          checkedAt: new Date().toISOString(),
-        }
-      }
-
-      await deps.store.checkpoint(manifest)
-      await writeBackups(deps.settings.backupPaths, manifest, deps.log)
-    },
-
-    async syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }) {
+    try {
       const startedAt = new Date().toISOString()
       running.value = true
       phase.value = 'starting'
       emitState()
 
+      // The settings are read now, not when the app started: a folder the
+      // user added a moment ago is mirrored by this run.
+      const settings = await deps.settings()
       const manifest = await deps.store.read()
       const selected = mirrorName
-        ? mirrors.filter((m) => m.name === mirrorName)
-        : mirrors
+        ? mirrorsToSync(settings).filter((config) => config.name === mirrorName)
+        : mirrorsToSync(settings)
 
       const summary: RunSummary = {
         startedAt,
@@ -450,43 +468,208 @@ export function createRunner(deps: RunnerDeps): Runner {
         reports: [],
       }
 
-      for (const spec of selected) {
-        const outcome = await runMirror(spec, manifest, options?.overrideGuard ?? false)
+      for (const config of selected) {
+        const outcome = await runMirror(config, manifest, options?.overrideGuard ?? false, settings)
         summary.uploaded += outcome.counts.uploaded
         summary.updated += outcome.counts.updated
         summary.downloaded += outcome.counts.downloaded
         summary.trashed += outcome.counts.trashed
         summary.errors += outcome.counts.errors
-        summary.mirrors.push({ name: spec.name, counts: outcome.counts })
+        summary.mirrors.push({ name: config.name, counts: outcome.counts })
         summary.changed.push(...outcome.changed)
         summary.reports.push(...outcome.reports)
       }
 
       summary.finishedAt = new Date().toISOString()
       await deps.store.checkpoint(manifest)
-      await writeBackups(deps.settings.backupPaths, manifest, deps.log)
+      await writeBackups(settings.backupPaths, manifest, deps.log)
 
-      running.value = false
-      phase.value = 'idle'
       lastRun.value = summary
-      emitState()
       deps.emit({ type: 'finished', summary })
       return summary
+    } finally {
+      // Whatever happened, the app is not syncing any more and the lock
+      // is free again.
+      running.value = false
+      phase.value = 'idle'
+      emitState()
+      try {
+        await releaseSyncLock(lockPath)
+      } catch (err) {
+        // A lock that cannot be removed is stale in six hours' time. It
+        // must not hide the error the run failed with.
+        note(
+          deps.log,
+          `the sync lock could not be removed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        )
+      }
+    }
+  }
+
+  const runner: Runner = {
+    async prime(): Promise<void> {
+      const settings = await deps.settings()
+      const manifest = await deps.store.read()
+      for (const config of configuredMirrors(settings)) {
+        const mirrorCard = card(config.name)
+        mirrorCard.localRoot = config.root
+        mirrorCard.drivePath = `My Drive/${config.drivePath}`
+        const mirrorManifest = manifest.mirrors[config.name]
+        mirrorCard.lastSyncedAt = mirrorManifest?.lastSyncAt ?? null
+        try {
+          const local = await scanLocal({ root: config.root, knownPaths: [] })
+          mirrorCard.fileCount = local.recursiveCounts[''] ?? 0
+        } catch {
+          // The folder is not there. A run will say so.
+        }
+      }
+      emitState()
     },
 
-    state(): AppState {
-      return {
-        mirrors: [...cards.values()],
-        running: running.value,
-        phase: phase.value,
-        lastRun: lastRun.value,
-        accountEmail: auth.email,
-        needsAuth: !auth.signedIn,
+    async rebase(mirrorName: string): Promise<void> {
+      const settings = await deps.settings()
+      const manifest = await deps.store.read()
+      const config = settings.mirrors.find((m) => m.name === mirrorName)
+      if (!config) return
+
+      const mirrorManifest = manifest.mirrors[mirrorName] ?? emptyMirror(config.root)
+
+      // The live entries describe the OLD volume. They become retired
+      // records, so the engine can later tell "the same file came back"
+      // from "a different file took its place".
+      manifest.mirrors[mirrorName] = rebaseMirror(mirrorManifest, new Date().toISOString())
+
+      // The new volume's serial is what is recorded from now on.
+      const driveLetter = driveLetterOf(config.root)
+      if (driveLetter) {
+        const dev = volumeDevOf(driveLetter)
+        if (dev !== null) {
+          manifest.volumes[driveLetter] = {
+            dev,
+            checkedAt: new Date().toISOString(),
+          }
+        }
       }
+
+      await deps.store.checkpoint(manifest)
+      await writeBackups(settings.backupPaths, manifest, deps.log)
+    },
+
+    async syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }) {
+      // A run that is already going is the run. A second "Sync now"
+      // joins it rather than starting a second one, because two runs
+      // that read the manifest at the same time would both write it.
+      if (inFlight) return inFlight
+      inFlight = runSync(mirrorName, options).finally(() => {
+        inFlight = null
+      })
+      return inFlight
+    },
+
+    async state(): Promise<AppState> {
+      const settings = await deps.settings()
+      return buildState(settings)
     },
   }
 
   return runner
+}
+
+/**
+ * The mirrors the app is configured with.
+ *
+ * A mirror the user removed is not one of them: it keeps its name and its
+ * folder until it is forgotten, but it is not mirrored any more.
+ */
+function configuredMirrors(settings: Settings): MirrorConfig[] {
+  return settings.mirrors.filter((config) => !config.removedAt)
+}
+
+/**
+ * The mirrors a run should sync: the ones that are enabled and have not
+ * been removed.
+ */
+function mirrorsToSync(settings: Settings): MirrorConfig[] {
+  return settings.mirrors.filter((config) => config.enabled && !config.removedAt)
+}
+
+/** A summary of a run that did not happen. */
+function emptySummary(): RunSummary {
+  const now = new Date().toISOString()
+  return {
+    startedAt: now,
+    finishedAt: now,
+    uploaded: 0,
+    updated: 0,
+    downloaded: 0,
+    trashed: 0,
+    errors: 0,
+    mirrors: [],
+    changed: [],
+    reports: [],
+  }
+}
+
+/**
+ * The lock file's place: with the app's other files.
+ */
+function defaultLockPath(): string {
+  return join(appDataDir(), 'sync.lock')
+}
+
+/**
+ * Take the lock that says a sync is running.
+ *
+ * The file is created with the exclusive-create flag, so only one process
+ * can hold it: the other one is told the lock is taken. A lock older than
+ * six hours is stale - the run that took it is long gone - and is taken
+ * over, so a crash cannot wedge the schedule forever.
+ *
+ * The lock is held for the duration of a run, not for the lifetime of the
+ * app. A scheduled run therefore still happens while the app is open and
+ * idle, and is skipped only when a sync is genuinely in progress.
+ */
+export async function acquireSyncLock(lockPath: string, now: Date): Promise<boolean> {
+  await mkdir(dirname(lockPath), { recursive: true }).catch(() => {
+    // The directory may already be there, or it may not be ours to make.
+    // Creating the lock file is the real test either way.
+  })
+  if (await createLockFile(lockPath)) return true
+
+  const info = await stat(lockPath).catch(() => null)
+  if (!info) {
+    // The lock was given back between the two calls. Try once more.
+    return await createLockFile(lockPath)
+  }
+  if (now.getTime() - info.mtimeMs <= LOCK_STALE_MS) return false
+
+  // The lock is stale: the run that took it is long gone.
+  await rm(lockPath, { force: true })
+  return await createLockFile(lockPath)
+}
+
+/**
+ * Give the lock back.
+ *
+ * A lock that is not there is not a problem: the run is over either way.
+ */
+export async function releaseSyncLock(lockPath: string): Promise<void> {
+  await rm(lockPath, { force: true })
+}
+
+/** Create the lock file, if it is not already there. */
+async function createLockFile(lockPath: string): Promise<boolean> {
+  try {
+    const handle = await open(lockPath, 'wx')
+    await handle.close()
+    return true
+  } catch {
+    // The lock is taken, or it cannot be created at all. Either way this
+    // run does not hold it.
+    return false
+  }
 }
 
 /**
@@ -548,22 +731,16 @@ function note(log: ((message: string) => void) | undefined, message: string): vo
   }
 }
 
-/** An empty manifest for a mirror that has never run. */
-function emptyManifestFor(root: string): MirrorManifest {
-  return {
-    root,
-    lastCounts: {},
-    rebase: null,
-    dirs: {},
-    files: {},
-    retired: {},
-  }
-}
-
-/** The drive letter of a path, e.g. `E:`. */
-function driveLetterOf(root: string): string {
+/**
+ * The drive letter of a path, e.g. `C:`, or null when it has none.
+ *
+ * A UNC path and a path that is not absolute have no drive letter, and
+ * guessing one would report the wrong volume - or a volume that is not
+ * there at all.
+ */
+export function driveLetterOf(root: string): string | null {
   const match = /^([a-zA-Z]):/.exec(root)
-  return match ? `${match[1]!.toUpperCase()}:` : 'E:'
+  return match ? `${match[1]!.toUpperCase()}:` : null
 }
 
 /**
@@ -752,4 +929,3 @@ async function md5OfFile(abs: string): Promise<string | null> {
     return null
   }
 }
-
