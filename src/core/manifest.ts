@@ -171,14 +171,19 @@ export function createManifestStore(dir: string): ManifestStore {
         throw err
       }
       const parsed = JSON.parse(raw) as Partial<Manifest>
-      if (typeof parsed.version !== 'number') return emptyManifest()
+      if (typeof parsed !== 'object' || parsed === null) return emptyManifest()
+      // A file whose version field is not a number is damaged, but it is
+      // not empty. Throwing it away would lose every mirror, every file
+      // and every retired record it holds, which is the one thing this
+      // file must never do. The version this build writes stands in for
+      // the one that was damaged; everything else in the file is kept.
+      const version =
+        typeof parsed.version === 'number' ? parsed.version : MANIFEST_VERSION
       // The file is read as it is. An older manifest keeps every mirror,
       // every file and every retired record it holds, and only gains the
       // fields this build knows and the file does not mention - the account
-      // above all. The version in the file is left alone here: there is no
-      // migration step and no data is moved. The write stamps the version
-      // this build writes.
-      return { ...emptyManifest(), ...parsed }
+      // above all. There is no migration step and no data is moved.
+      return { ...emptyManifest(), ...parsed, version }
     },
 
     async write(m: Manifest): Promise<void> {

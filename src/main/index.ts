@@ -299,7 +299,18 @@ if (!app.requestSingleInstanceLock()) {
       log: (message: string) => logger.log({ level: 'warn', message }),
       hasCredentials: async () =>
         Boolean(credentialStore.getClientId()) && (await loadTokens()) !== null,
-      accountEmail: () => null,
+      accountEmail: async () => {
+        const tokens = await loadTokens()
+        if (!tokens) return null
+        try {
+          return await client.getAccountEmail()
+        } catch {
+          // The account is unknown rather than wrong. The manifest's
+          // account is only used to catch a switch, and a missing answer
+          // must never look like a different account.
+          return null
+        }
+      },
     })
 
     registerIpc({

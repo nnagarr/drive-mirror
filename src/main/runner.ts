@@ -89,7 +89,7 @@ export interface RunnerDeps {
   /** Whether the app holds usable credentials. */
   hasCredentials?: () => boolean | Promise<boolean>
   /** The signed-in account, when it is known. */
-  accountEmail?: () => string | null
+  accountEmail?: () => string | null | Promise<string | null>
   /**
    * Where a message about the run that is not an error goes.
    *
@@ -164,7 +164,7 @@ export function createRunner(deps: RunnerDeps): Runner {
 
   async function refreshAuth(): Promise<void> {
     auth.signedIn = deps.hasCredentials ? Boolean(await deps.hasCredentials()) : false
-    auth.email = deps.accountEmail?.() ?? null
+    auth.email = (await deps.accountEmail?.()) ?? null
   }
 
   /**
@@ -472,6 +472,28 @@ export function createRunner(deps: RunnerDeps): Runner {
         mirrors: [],
         changed: [],
         reports: [],
+      }
+
+      // The manifest belongs to one Google account. A file id in it
+      // points at a file that account can see, so a different account
+      // cannot use it at all. The run is blocked rather than quietly
+      // producing a broken mirror.
+      const signedIn = await deps.accountEmail?.()
+      const owner =
+        typeof manifest.accountEmail === 'string' ? manifest.accountEmail : null
+      if (signedIn && owner && owner !== signedIn) {
+        const message =
+          `this manifest belongs to ${owner}, but you are signed in as ${signedIn}. ` +
+          'Start a new manifest for this account before syncing.'
+        deps.emit({ type: 'error', message })
+        note(deps.log, message)
+        summary.errors = 1
+        summary.reports.push({ code: 'anomaly', relPath: '', message })
+        return summary
+      }
+      if (signedIn && !owner) {
+        // The first run on this account. The manifest now belongs to it.
+        manifest.accountEmail = signedIn
       }
 
       for (const config of selected) {

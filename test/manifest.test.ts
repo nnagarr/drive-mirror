@@ -510,3 +510,35 @@ describe('buildIndexes', () => {
     expect(retiredByPath.get('renders/final/scene.psd')).toHaveLength(1)
   })
 })
+
+describe('a manifest whose version field is not a number', () => {
+  it('keeps every mirror instead of throwing the file away', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dm-manifest-'))
+    const file = join(dir, 'manifest.json')
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: '10',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        volumes: {},
+        mirrors: {
+          Medicine: {
+            root: 'E:\\Medicine',
+            lastCounts: { '': 43 },
+            rebase: null,
+            dirs: {},
+            files: {},
+            retired: {},
+          },
+        },
+      }),
+      'utf8',
+    )
+    const store = createManifestStore(dir)
+
+    const m = await store.read()
+
+    expect(m.mirrors.Medicine?.root).toBe('E:\\Medicine')
+    expect(m.mirrors.Medicine?.lastCounts['']).toBe(43)
+  })
+})

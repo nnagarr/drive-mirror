@@ -82,7 +82,13 @@ async function harness(
 }
 
 /** The runner under test. */
-function runner(box: Harness, options: { client?: DriveClient } = {}) {
+function runner(
+  box: Harness,
+  options: {
+    client?: DriveClient
+    accountEmail?: () => string | null | Promise<string | null>
+  } = {},
+) {
   return createRunner({
     client: options.client ?? box.client,
     store: box.store,
@@ -91,7 +97,7 @@ function runner(box: Harness, options: { client?: DriveClient } = {}) {
     log: (message) => box.logs.push(message),
     lockPath: box.lockPath,
     hasCredentials: () => true,
-    accountEmail: () => 'user@example.com',
+    accountEmail: options.accountEmail ?? (() => 'user@example.com'),
   })
 }
 
@@ -630,5 +636,43 @@ describe('the lock between runs', () => {
     const summary = await r.syncNow()
     expect(summary.reports.length).toBeGreaterThan(0)
     expect(summary.reports[0]!.message).toMatch(/another sync/i)
+  })
+})
+
+describe('the manifest and the account that owns it', () => {
+  it('blocks the run when the signed-in account is not the one that owns the manifest', async () => {
+    const box = await harness()
+    const manifest = await box.store.read()
+    manifest.accountEmail = 'someone-else@example.com'
+    await box.store.write(manifest)
+    const r = runner(box, { accountEmail: async () => 'me@example.com' })
+
+    const summary = await r.syncNow()
+
+    expect(summary.errors).toBe(1)
+    expect(summary.reports[0]?.message).toContain('someone-else@example.com')
+    expect(summary.reports[0]?.message).toContain('me@example.com')
+    expect(summary.uploaded).toBe(0)
+  })
+
+  it('records the account on the first run and does not block it', async () => {
+    const box = await harness()
+    const r = runner(box, { accountEmail: async () => 'me@example.com' })
+
+    await r.syncNow()
+
+    expect((await box.store.read()).accountEmail).toBe('me@example.com')
+  })
+
+  it('treats an account that is not a string as no account', async () => {
+    const box = await harness()
+    const manifest = await box.store.read()
+    ;(manifest as { accountEmail: unknown }).accountEmail = 42
+    await box.store.write(manifest)
+    const r = runner(box, { accountEmail: async () => 'me@example.com' })
+
+    const summary = await r.syncNow()
+
+    expect(summary.errors).toBe(0)
   })
 })
