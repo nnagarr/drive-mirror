@@ -87,12 +87,13 @@ function runner(
   options: {
     client?: DriveClient
     accountEmail?: () => string | null | Promise<string | null>
+    settings?: () => Promise<Settings>
   } = {},
 ) {
   return createRunner({
     client: options.client ?? box.client,
     store: box.store,
-    settings: async () => box.settings,
+    settings: options.settings ?? (async () => box.settings),
     emit: (event) => box.events.push(event),
     log: (message) => box.logs.push(message),
     lockPath: box.lockPath,
@@ -674,5 +675,170 @@ describe('the manifest and the account that owns it', () => {
     const summary = await r.syncNow()
 
     expect(summary.errors).toBe(0)
+  })
+})
+
+describe('forgetting a mirror the user removed', () => {
+  const day = 24 * 60 * 60 * 1000
+
+  it('forgets one removed thirty-one days ago, and not one removed yesterday', async () => {
+    const box = await harness()
+    const manifest = await box.store.read()
+    manifest.mirrors.Old = {
+      root: 'E:\\Old',
+      lastCounts: {},
+      rebase: null,
+      dirs: {},
+      files: {},
+      retired: {},
+    }
+    manifest.mirrors.Young = {
+      root: 'E:\\Young',
+      lastCounts: {},
+      rebase: null,
+      dirs: {},
+      files: {},
+      retired: {},
+    }
+    await box.store.write(manifest)
+    const settings: Settings = {
+      ...box.settings,
+      mirrors: [
+        {
+          name: 'Old',
+          root: 'E:\\Old',
+          drivePath: 'Old',
+          enabled: false,
+          removedAt: new Date(Date.now() - 31 * day).toISOString(),
+        },
+        {
+          name: 'Young',
+          root: 'E:\\Young',
+          drivePath: 'Young',
+          enabled: false,
+          removedAt: new Date(Date.now() - 1 * day).toISOString(),
+        },
+      ],
+    }
+    const r = runner(box, { settings: async () => settings })
+
+    expect(await r.pruneRemovedMirrors()).toBe(1)
+
+    const after = await box.store.read()
+    expect(after.mirrors.Old).toBeUndefined()
+    expect(after.mirrors.Young).toBeDefined()
+  })
+
+  it('never forgets a mirror that is still configured', async () => {
+    const box = await harness()
+    const manifest = await box.store.read()
+    manifest.mirrors.Kept = {
+      root: 'E:\\Kept',
+      lastCounts: {},
+      rebase: null,
+      dirs: {},
+      files: {},
+      retired: {},
+    }
+    await box.store.write(manifest)
+    const r = runner(box)
+
+    expect(await r.pruneRemovedMirrors()).toBe(0)
+    expect((await box.store.read()).mirrors.Kept).toBeDefined()
+  })
+})
+
+describe('changing where a mirror lives on Drive', () => {
+  it('moves the folder rather than copying it', async () => {
+    const box = await harness()
+    const manifest = await box.store.read()
+    manifest.mirrors.Medicine = {
+      root: box.root,
+      driveFolderId: MIRROR_FOLDER_ID,
+      lastCounts: {},
+      rebase: null,
+      dirs: {},
+      files: {},
+      retired: {},
+    }
+    await box.store.write(manifest)
+    const r = runner(box)
+
+    const result = await r.moveMirrorDestination('Medicine', 'Archive/Photos')
+
+    expect(result.ok).toBe(true)
+    const moved = box.client.calls.find((c) => c.op === 'moveFolder')
+    expect(moved).toBeDefined()
+    expect(moved!.id).toBe(MIRROR_FOLDER_ID)
+  })
+
+  it('says so when there is no such mirror', async () => {
+    const box = await harness()
+    const r = runner(box)
+    const result = await r.moveMirrorDestination('Nope', 'Photos')
+    expect(result.ok).toBe(false)
+  })
+})
+
+describe('bringing a restored file back', () => {
+  async function withRestored(box: Harness): Promise<void> {
+    const manifest = await box.store.read()
+    manifest.mirrors.Medicine = {
+      root: box.root,
+      lastCounts: {},
+      rebase: null,
+      dirs: {},
+      files: {},
+      retired: {
+        D1: {
+          id: 'D1',
+          path: 'a.txt',
+          state: 'restored',
+          at: '2026-10-21T00:00:00.000Z',
+          md5: 'x',
+          driveMimeType: 'text/plain',
+          localPath: null,
+        },
+      },
+    }
+    await box.store.write(manifest)
+    box.client.add('D1', 'a.txt', { content: Buffer.from('hello') })
+  }
+
+  it('puts the file back on the disk', async () => {
+    const box = await harness()
+    await withRestored(box)
+    const r = runner(box)
+
+    const result = await r.downloadRestored('Medicine', 'D1')
+
+    expect(result.ok).toBe(true)
+    expect(await readFile(join(box.root, 'a.txt'), 'utf8')).toBe('hello')
+  })
+
+  it('refuses to replace a different file that is already there', async () => {
+    const box = await harness()
+    await withRestored(box)
+    await writeFile(join(box.root, 'a.txt'), 'something else', 'utf8')
+    const r = runner(box)
+
+    const result = await r.downloadRestored('Medicine', 'D1')
+
+    expect(result.ok).toBe(false)
+    expect(await readFile(join(box.root, 'a.txt'), 'utf8')).toBe('something else')
+  })
+
+  it('says so when the file is not waiting to be recovered', async () => {
+    const box = await harness()
+    await withRestored(box)
+    const manifest = await box.store.read()
+    const record = manifest.mirrors.Medicine!.retired.D1!
+    record.state = 'trashed'
+    await box.store.write(manifest)
+    const r = runner(box)
+
+    const result = await r.downloadRestored('Medicine', 'D1')
+
+    expect(result.ok).toBe(false)
   })
 })

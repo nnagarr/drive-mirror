@@ -355,6 +355,9 @@ export function App(): JSX.Element {
             )
           }}
           onSyncNow={() => void sync()}
+          onStartFreshManifest={() => {
+            void window.driveMirror.startFreshManifest().then(refresh)
+          }}
         />
       )}
     </div>

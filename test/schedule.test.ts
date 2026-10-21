@@ -72,6 +72,28 @@ describe('the schedule', () => {
     expect(next.getDate()).toBe(2)
   })
 
+  it('crosses a year boundary', () => {
+    const from = new Date('2026-12-30T10:00:00')
+    const next = nextFireAt({ kind: 'every-days', everyDays: 3 }, from, null)
+    expect(next.getFullYear()).toBe(2027)
+    expect(next.getMonth()).toBe(0)
+  })
+
+  it('lands on the same time of day whatever the offset', () => {
+    // A time of day is a wall-clock time, not an interval. The next run
+    // is at that hour, even across a change in the offset.
+    for (const from of [
+      new Date('2026-03-28T23:00:00'),
+      new Date('2026-03-29T23:00:00'),
+      new Date('2026-10-24T23:00:00'),
+      new Date('2026-10-25T23:00:00'),
+    ]) {
+      const next = nextFireAt({ kind: 'daily', at: '02:00' }, from, null)
+      expect(next.getHours()).toBe(2)
+      expect(next.getMinutes()).toBe(0)
+    }
+  })
+
   it('knows when a run was missed', () => {
     const shape = { kind: 'every-hours', everyHours: 6 } as const
     const now = new Date('2026-03-01T20:00:00')

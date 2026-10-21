@@ -755,3 +755,10 @@ body {
   border-radius: 5px;
   flex: none;
 }
+
+/* Why a recovered file cannot be brought back yet. */
+.recovered__blocked {
+  color: var(--error);
+  font-size: 0.75rem;
+  flex: 1;
+}

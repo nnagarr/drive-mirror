@@ -21,9 +21,10 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { writeAtomic } from '../core/atomic'
 import type { MirrorConfig } from '../core/mirrorConfig'
 
 // The rules for a mirror live with the rest of the core, so they can be
@@ -229,14 +230,9 @@ export function createSettingsStore(file: string): {
     // the settings for the interface, and it is never written here.
     const stored: Record<string, unknown> = { ...settings }
     delete stored.clientId
-    const tmp = `${file}.tmp`
-    await writeFile(tmp, JSON.stringify(stored, null, 2), 'utf8')
-    try {
-      await rename(tmp, file)
-    } catch (err) {
-      await rm(tmp, { force: true })
-      throw err
-    }
+    // The same atomic write the manifest and every backup copy use, so
+    // there is one way to write a file that cannot be left half-written.
+    await writeAtomic(file, JSON.stringify(stored, null, 2))
   }
 
   async function patch(changes: Partial<Settings>): Promise<Settings> {

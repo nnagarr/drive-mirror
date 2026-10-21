@@ -12,6 +12,8 @@ export interface SettingsDialogProps {
   onScheduleChange: (patch: Partial<ScheduleConfig>) => Promise<void>
   /** Sync everything now. */
   onSyncNow: () => void
+  /** Archive the manifest and start a new one, for a different account. */
+  onStartFreshManifest: () => void
 }
 
 /**
@@ -28,6 +30,7 @@ export function SettingsDialog({
   onShowSetup,
   onScheduleChange,
   onSyncNow,
+  onStartFreshManifest,
 }: SettingsDialogProps): JSX.Element {
   const [clientId, setClientId] = useState(settings.clientId)
   const [clientSecret, setClientSecret] = useState('')
@@ -211,6 +214,28 @@ export function SettingsDialog({
               onClick={() => void resetConnection()}
             >
               Reset the connection
+            </button>
+          </div>
+          <p className="field__hint">
+            The manifest belongs to the Google account that made it. If you sign in as
+            somebody else, the app stops and says so. Starting a new manifest archives
+            the old one and begins again - the old one is kept, so nothing is lost.
+          </p>
+          <div className="dialog__row">
+            <button
+              type="button"
+              className="button button--quiet"
+              disabled={busy}
+              onClick={() => {
+                const agreed = window.confirm(
+                  'Start a new manifest?\n\n' +
+                    'The current manifest is archived and a new one is begun. The ' +
+                    'copy in your Drive is not touched.',
+                )
+                if (agreed) onStartFreshManifest()
+              }}
+            >
+              Start a new manifest
             </button>
           </div>
         </section>

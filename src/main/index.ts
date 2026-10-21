@@ -49,10 +49,13 @@ function emit(event: AppEvent): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(EVENT_CHANNEL, event)
   }
-  if (!mainWindow && (event.type === 'notice' || event.type === 'error')) {
+  if (!mainWindow && (event.type === 'notice' || event.type === 'error' || event.type === 'guard')) {
     // There is no window to show this in, so it waits for the next time
-    // the app is opened.
+    // the app is opened - and the user is told now.
     void rememberNotice(event.message)
+    if (Notification.isSupported()) {
+      new Notification({ title: 'Drive Mirror', body: event.message }).show()
+    }
   }
 }
 
@@ -60,7 +63,7 @@ function emit(event: AppEvent): void {
 async function rememberNotice(message: string): Promise<void> {
   const settings = await currentSettings()
   const next = await setPendingNotice(settings, message, new Date())
-  await settingsStore.write(next)
+  await settingsStore.patch({ pendingNotice: next.pendingNotice })
 }
 
 /* ------------------------------------------------------------------ */
@@ -337,6 +340,9 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       // The settings are read when a run starts, so a folder the user adds
       // while the app is open is mirrored by the next run.
       settings: () => currentSettings(),
+      // The runner writes the settings too, when a run resets the
+      // missed-slot clock.
+      saveSettings,
       emit,
       // The lock that stops a scheduled run and this window from writing
       // the manifest at the same time.
@@ -455,6 +461,13 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         )
         await store.write(emptyManifest())
       },
+      applySchedule: () => scheduler.applySchedule(),
+      applyAutoLaunch(enabled: boolean) {
+        // In development the executable is Electron's own, which is not
+        // something to start with Windows.
+        if (!app.isPackaged) return
+        app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath })
+      },
       onError: (message: string) => {
         emit({ type: 'error', message })
       },
@@ -464,6 +477,14 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       // The Windows task's launch: one sync, no window, then out. The
       // scheduler records when the run happened, so the next slot is
       // measured from this one.
+      const settings = await currentSettings()
+      if (!settings.schedule.enabled) {
+        // The schedule was switched off, or was never turned on. The task
+        // has to go, or it will keep firing.
+        await unregisterTask()
+        app.quit()
+        return
+      }
       await scheduler.runNow()
       app.quit()
       return
@@ -474,6 +495,10 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
     // Fill in the file counts so the window shows the real trees before
     // the first run.
     await runner.prime()
+
+    // A mirror the user removed more than thirty days ago is forgotten:
+    // its history goes, and the copy of the bytes it replaced stays.
+    await runner.pruneRemovedMirrors()
 
     // The schedule starts last, so a run that was missed while the app
     // was closed happens after the window is up and can say so.

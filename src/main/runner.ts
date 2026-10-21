@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The sync runner.
  *
  * This is the part that ties everything together for one mirror: it scans
@@ -31,7 +31,7 @@
 
 import { createHash } from 'node:crypto'
 import { createReadStream, statSync } from 'node:fs'
-import { mkdir, open, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, open, readFile, rm, stat, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -225,11 +225,23 @@ export function createRunner(deps: RunnerDeps): Runner {
         // The files the user restored on Drive, waiting to be pulled back.
         mirrorCard.recovered = Object.values(manifest.mirrors[config.name]?.retired ?? {})
           .filter((record) => record.state === 'restored')
-          .map((record) => ({
-            driveFileId: record.id,
-            path: record.path,
-            at: record.at,
-          }))
+          .map((record) => {
+            const relPath = record.localPath ?? record.path
+            const target = join(config.root, ...relPath.split('/'))
+            let blocked: string | undefined
+            try {
+              statSync(target)
+              blocked = 'There is already a file at that path. Move it or delete it first.'
+            } catch {
+              // Nothing is there, so the file can come back.
+            }
+            return {
+              driveFileId: record.id,
+              path: record.path,
+              at: record.at,
+              blocked,
+            }
+          })
         return { ...mirrorCard }
       }),
       running: running.value,
@@ -275,7 +287,13 @@ export function createRunner(deps: RunnerDeps): Runner {
     try {
       rootStat = statSync(config.root)
     } catch {
-      skipMirror(config.name, 'missing-root', `the folder ${config.root} does not exist`, false)
+      skipMirror(
+        config.name,
+        'missing-root',
+        `the folder ${config.root} does not exist`,
+        false,
+        reports,
+      )
       return { counts, changed, reports, skipped: true }
     }
 
@@ -301,6 +319,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           'volume-changed',
           `the drive ${driveLetter} is now a different volume, so the files on it are not the ones that were mirrored`,
           true,
+          reports,
         )
         return { counts, changed, reports, skipped: true }
       }
@@ -314,6 +333,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           'volume-changed',
           `the folder ${config.root} is on a different volume from the drive ${driveLetter}`,
           true,
+          reports,
         )
         return { counts, changed, reports, skipped: true }
       }
@@ -342,6 +362,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           'count-drop',
           `the number of files fell by more than half in: ${where}`,
           true,
+          reports,
         )
         return { counts, changed, reports, skipped: true }
       }
@@ -349,16 +370,26 @@ export function createRunner(deps: RunnerDeps): Runner {
 
     // --- Guard 4: resolve the Drive folder ---------------------------
     phase.value = 'folders'
-    const folderId = await resolveMirrorFolder(deps.client, config.name)
-    if (folderId === null) {
+    // The destination is a path under My Drive. The stored id wins, so a
+    // folder the user renamed in the Drive browser is honoured rather
+    // than duplicated.
+    const resolved = await resolveMirrorPath(
+      deps.client,
+      config.drivePath,
+      MY_DRIVE_ID,
+      mirrorManifest.driveFolderId,
+    )
+    if ('ambiguous' in resolved) {
       skipMirror(
         config.name,
         'ambiguous-folder',
-        `more than one folder called ${config.name} exists on Drive`,
+        `there is more than one folder called ${resolved.segment} on Drive, so the mirror was left alone`,
         false,
+        reports,
       )
       return { counts, changed, reports, skipped: true }
     }
+    const folderId = resolved.id
 
     // --- The Drive tree ----------------------------------------------
     const nodes = await listTree(deps.client, folderId)
@@ -368,6 +399,8 @@ export function createRunner(deps: RunnerDeps): Runner {
     // resolved folder. They are rebuilt from the tree, so a stale id in
     // the manifest cannot point somewhere else.
     mirrorManifest.driveFolderId = folderId
+    mirrorManifest.driveFolderName = resolved.name
+    mirrorManifest.drivePath = config.drivePath
     mirrorManifest.dirs = {}
     for (const [path, id] of drive.dirs) {
       mirrorManifest.dirs[path] = { driveFolderId: id }
@@ -463,9 +496,14 @@ export function createRunner(deps: RunnerDeps): Runner {
     reason: string,
     message: string,
     canOverride: boolean,
+    reports: Report[],
   ): void {
     const mirrorCard = card(name)
     mirrorCard.status = 'skipped'
+    // A skipped mirror is something the user has to know about. Without
+    // this in the summary, a run that skipped half the mirrors reads as
+    // "everything is up to date".
+    reports.push({ code: 'anomaly', relPath: '', message })
     deps.emit({
       type: 'guard',
       mirror: name,
@@ -568,6 +606,14 @@ export function createRunner(deps: RunnerDeps): Runner {
         deps.emit({
           type: 'notice',
           message: `the backup copy at ${path} could not be written, so the manifest has no safety net there`,
+        })
+      }
+      // A manual "Sync now" is a run too. It resets the missed-slot
+      // clock, so the app does not also do a catch-up run on top of it.
+      if (deps.saveSettings) {
+        const current = await deps.settings()
+        await deps.saveSettings({
+          schedule: { ...current.schedule, lastRunAt: summary.finishedAt },
         })
       }
 
@@ -794,28 +840,20 @@ export function createRunner(deps: RunnerDeps): Runner {
         return { ok: false, message: 'That file is not on Drive any more.' }
       }
 
-      // Something is already there. It is only replaced when it is
-      // provably the same file.
-      const existing = await md5OfFile(dest)
-      if (existing !== null) {
-        if (!node.entry.md5Checksum || existing !== node.entry.md5Checksum) {
-          return {
-            ok: false,
-            message:
-              `There is already a file at ${relPath}, and it is not the same one. ` +
-              'Nothing was replaced.',
-          }
-        }
-      }
-
+      // The bytes are fetched first, into a temporary file. The comparison
+      // is then between the file that is there and the file that is
+      // coming - which works for a Google-native file too, where Drive
+      // has no hash of its own to compare against.
+      const tempPath = join(appDataDir(), `recovered-${driveFileId}.tmp`)
       try {
         const native = exportInfoFor(record.driveMimeType)
         if (native) {
-          await deps.client.exportTo(driveFileId, dest, native.exportMime)
+          await deps.client.exportTo(driveFileId, tempPath, native.exportMime)
         } else {
-          await deps.client.downloadTo(driveFileId, dest)
+          await deps.client.downloadTo(driveFileId, tempPath)
         }
       } catch (err) {
+        await rm(tempPath, { force: true })
         return {
           ok: false,
           message:
@@ -824,10 +862,39 @@ export function createRunner(deps: RunnerDeps): Runner {
         }
       }
 
+      // Something already at that path is only replaced when it is the
+      // same file.
+      const incoming = await md5OfFile(tempPath)
+      const existing = await md5OfFile(dest)
+      if (existing !== null && existing !== incoming) {
+        await rm(tempPath, { force: true })
+        return {
+          ok: false,
+          message:
+            `There is already a file at ${relPath}, and it is not the same one. ` +
+            'Nothing was replaced.',
+        }
+      }
+
+      try {
+        await mkdir(dirname(dest), { recursive: true })
+        await copyFile(tempPath, dest)
+      } catch (err) {
+        await rm(tempPath, { force: true })
+        return {
+          ok: false,
+          message:
+            'The file could not be put back: ' +
+            (err instanceof Error ? err.message : String(err)),
+        }
+      }
+      await rm(tempPath, { force: true })
+
       // The file is live again.
       const info = await stat(dest).catch(() => null)
-      const localMd5 = (await md5OfFile(dest)) ?? node.entry.md5Checksum ?? null
+      const localMd5 = (await md5OfFile(dest)) ?? incoming
       record.state = 'resynced'
+      record.at = new Date().toISOString()
       if (mirrorManifest) {
         mirrorManifest.files[record.path] = {
           displayPath: record.path,
@@ -933,7 +1000,10 @@ export async function acquireSyncLock(lockPath: string, now: Date): Promise<bool
     // The lock was given back between the two calls. Try once more.
     return await createLockFile(lockPath)
   }
-  if (now.getTime() - info.mtimeMs <= LOCK_STALE_MS) return false
+  // A lock that is exactly this old is taken over. With a schedule of
+  // every six hours, a lock left behind by a crashed run would
+  // otherwise block the very next slot.
+  if (now.getTime() - info.mtimeMs < LOCK_STALE_MS) return false
 
   // The lock is stale: the run that took it is long gone.
   await rm(lockPath, { force: true })
@@ -1022,7 +1092,7 @@ function note(log: ((message: string) => void) | undefined, message: string): vo
 }
 
 /**
- * The drive letter of a path, e.g. `C:`, or null when it has none.
+ * The drive letter of a path, or null when it has none.
  *
  * A UNC path and a path that is not absolute have no drive letter, and
  * guessing one would report the wrong volume - or a volume that is not
@@ -1041,36 +1111,15 @@ export function driveLetterOf(root: string): string | null {
  * change in it means a different physical volume is now mounted at the
  * same letter.
  */
+/**
+ * The volume a drive letter points at.
+ */
 function volumeDevOf(driveLetter: string): number | null {
   try {
     return statSync(`${driveLetter}\\`).dev
   } catch {
     return null
   }
-}
-
-/**
- * Find the Drive folder for a mirror.
- *
- * A folder that does not exist is created under My Drive, because a mirror
- * whose folder has been deleted should rebuild itself rather than stop.
- * More than one folder with the same name is refused: choosing one of them
- * would send the mirror into the wrong tree.
- */
-async function resolveMirrorFolder(
-  client: DriveClient,
-  name: string,
-): Promise<string | null> {
-  const children = await client.listChildren(MY_DRIVE_ID)
-  const matches = children.filter(
-    (node) =>
-      node.entry.mimeType === FOLDER_MIME &&
-      node.entry.name.toLowerCase() === name.toLowerCase(),
-  )
-  if (matches.length > 1) return null
-  if (matches.length === 1) return matches[0]!.entry.id
-  const created = await client.createFolder(name, MY_DRIVE_ID)
-  return created.id
 }
 
 /**
@@ -1219,3 +1268,4 @@ async function md5OfFile(abs: string): Promise<string | null> {
     return null
   }
 }
+

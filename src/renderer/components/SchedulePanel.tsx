@@ -181,6 +181,7 @@ function NumberField({
   max: number
   onChange: (value: number) => void
 }): JSX.Element {
+  const [draft, setDraft] = useState(String(value))
   return (
     <label className="field">
       <span className="field__label">{label}</span>
@@ -189,8 +190,18 @@ function NumberField({
         type="number"
         min={min}
         max={max}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        value={draft}
+        // The value is kept until the field is left, so a half-typed
+        // number is never sent to the app.
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          const next = Number(draft)
+          if (Number.isFinite(next) && next >= min && next <= max) {
+            onChange(next)
+          } else {
+            setDraft(String(value))
+          }
+        }}
       />
     </label>
   )

@@ -1,7 +1,7 @@
 import { isRunMissed, nextFireAt } from '../core/schedule'
 import type { ScheduleShape } from '../core/schedule'
 import type { RunSummary } from './ipc'
-import type { Settings } from './settings'
+import type { ScheduleConfig, Settings } from './settings'
 
 /**
  * The timer that runs the syncs on their own.
@@ -47,6 +47,15 @@ export interface SchedulerDeps {
 export interface Scheduler {
   /** Start it: catch up on a missed run, and arm the timer. */
   start(): Promise<void>
+  /**
+   * Take a new schedule into account.
+   *
+   * Called when the user changes the schedule, so the app does not need
+   * restarting for the change to mean anything. The Windows task is
+   * removed when the schedule is switched off or the mechanism moves away
+   * from it, because a task that outlives its schedule keeps firing.
+   */
+  applySchedule(): Promise<void>
   /** Stop it. */
   stop(): void
   /** Run now, whether a slot is due or not. */
@@ -59,6 +68,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   let timer: unknown = null
   let inFlight: Promise<void> | null = null
   let shape: ScheduleShape | null = null
+  let mechanism: ScheduleConfig['mechanism'] = 'in-app'
   let lastRunAt: string | null = null
   let nextRun: Date | null = null
   let stopResume: (() => void) | null = null
@@ -75,6 +85,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     timer = deps.setTimer(() => {
       void runNow()
     }, wait)
+    // The next run is shown in the interface, so it has to be written
+    // down.
+    void persist({ nextRunAt: nextRun.toISOString() })
+  }
+
+  /** Save part of the schedule. */
+  async function persist(patch: Partial<ScheduleConfig>): Promise<void> {
+    const settings = await deps.settings()
+    await deps.saveSettings({ schedule: { ...settings.schedule, ...patch } })
   }
 
   /** Do the run, and remember when it happened. */
@@ -82,10 +101,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     try {
       await deps.runSync()
       lastRunAt = deps.now().toISOString()
-      const settings = await deps.settings()
-      await deps.saveSettings({
-        schedule: { ...settings.schedule, lastRunAt, nextRunAt: null },
-      })
+      await persist({ lastRunAt })
     } catch (err) {
       // The user is not watching when a scheduled run happens, so a
       // failure that nobody hears about is a backup that quietly stopped.
@@ -94,7 +110,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         err instanceof Error ? err.message : String(err),
       )
     }
-    arm()
+    // Only the in-app timer is armed here. With the Windows task as the
+    // mechanism, the app's own timer must stay off, or there would be two
+    // syncs per slot.
+    if (mechanism === 'in-app') arm()
   }
 
   function runNow(): Promise<void> {
@@ -110,27 +129,58 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return run
   }
 
-  /** Whether a slot was missed while the app was not looking. */
-  function missed(): boolean {
+  /**
+   * Whether a slot was missed while the app was not looking.
+   *
+   * A schedule that has **never run** has nothing to catch up on: the
+   * user pressed Sync now, or the first slot is still to come. That is a
+   * different question from `isRunMissed`, which asks whether a run that
+   * was due did not happen.
+   */
+  function catchUpIsDue(): boolean {
     if (!shape) return false
-    // A schedule that has never run has nothing to catch up on. The user
-    // presses Sync now, or waits for the first slot.
     if (lastRunAt === null) return false
     return isRunMissed(shape, lastRunAt, deps.now())
   }
 
   /** Read the schedule out of the settings and remember it. */
-  async function refresh(): Promise<Settings['schedule']> {
+  async function refresh(): Promise<ScheduleConfig> {
     const settings = await deps.settings()
     shape = settings.schedule.shape
+    mechanism = settings.schedule.mechanism
     lastRunAt = settings.schedule.lastRunAt
     return settings.schedule
+  }
+
+  /** Take the Windows task away. A task that is not there is not an error. */
+  async function removeTask(): Promise<void> {
+    try {
+      await deps.unregisterTask()
+    } catch {
+      // Nothing to remove, or Windows would not say. Either way there is
+      // no task to fire.
+    }
+  }
+
+  /** Disarm the timer and stop listening for the machine waking up. */
+  function stopTimer(): void {
+    if (timer !== null) {
+      deps.clearTimer(timer)
+      timer = null
+    }
+    if (stopResume) {
+      stopResume()
+      stopResume = null
+    }
   }
 
   return {
     async start(): Promise<void> {
       const schedule = await refresh()
-      if (!schedule.enabled) return
+      if (!schedule.enabled) {
+        await removeTask()
+        return
+      }
 
       if (schedule.mechanism === 'windows-task') {
         if (!(await deps.taskExists())) {
@@ -140,11 +190,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             nextFireAt(shape!, deps.now(), lastRunAt),
           )
         }
+      } else {
+        await removeTask()
       }
 
       // A run that was missed - the machine was off, or the user was not
       // signed in - happens once, now.
-      if (missed()) {
+      if (catchUpIsDue()) {
         await runNow()
       }
 
@@ -157,15 +209,35 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       })
     },
 
+    async applySchedule(): Promise<void> {
+      const schedule = await refresh()
+
+      if (!schedule.enabled) {
+        // The task must not outlive the schedule that asked for it.
+        await removeTask()
+        stopTimer()
+        return
+      }
+
+      if (schedule.mechanism === 'windows-task') {
+        // The app's own timer must not also run.
+        stopTimer()
+        if (!(await deps.taskExists())) {
+          await deps.registerTask(
+            shape!,
+            deps.exePath(),
+            nextFireAt(shape!, deps.now(), lastRunAt),
+          )
+        }
+        return
+      }
+
+      await removeTask()
+      arm()
+    },
+
     stop(): void {
-      if (timer !== null) {
-        deps.clearTimer(timer)
-        timer = null
-      }
-      if (stopResume) {
-        stopResume()
-        stopResume = null
-      }
+      stopTimer()
     },
 
     runNow(): Promise<void> {
@@ -181,7 +253,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function onWake(): Promise<void> {
     const schedule = await refresh()
     if (!schedule.enabled) return
-    if (missed()) {
+    if (catchUpIsDue()) {
       await runNow()
       return
     }

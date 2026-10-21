@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
+import { suggestDrivePath } from '../../core/mirrorConfig'
 
 export interface AddMirrorDialogProps {
   /** The mirror being edited, or null when a new one is being added. */
@@ -47,7 +48,9 @@ export function AddMirrorDialog({
       if (!name) {
         const base = chosen.split(/[\\/]/).filter(Boolean).pop() ?? ''
         setName(base)
-        setDrivePath(base)
+        // The Drive folder is offered as a path that is known to be
+        // legal, so the user is never handed one the app will refuse.
+        setDrivePath(suggestDrivePath(base))
       }
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'The folder could not be chosen.')

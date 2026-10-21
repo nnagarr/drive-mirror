@@ -303,7 +303,11 @@ describe('diff engine exhaustiveness', () => {
   })
 
   it('INV-5: every retired state is consumed, and resynced is excluded from P4', () => {
-    // Every state must be reachable by at least one rule.
+    // A mirror the user removed is forgotten entirely after thirty days,
+    // retired records included. That is the one carve-out from the
+    // never-prune rule; see the v2 design, section 8, amendment A1. For
+    // every mirror that is still configured, every retired state below
+    // must still be consumed by some rule.
     for (const state of RETIRED_STATES) {
       expect(RETIRED_STATES).toContain(state)
     }

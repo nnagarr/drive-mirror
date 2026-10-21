@@ -32,12 +32,15 @@ export function RecoveredPanel({
           <li key={file.driveFileId} className="recovered__item">
             <span className="recovered__path">{file.path}</span>
             <span className="recovered__when">{relativeTime(file.at)}</span>
+            {file.blocked && <span className="recovered__blocked">{file.blocked}</span>}
             <button
               type="button"
               className="button button--quiet"
+              disabled={Boolean(file.blocked)}
+              title={file.blocked}
               onClick={() => onDownload(mirror.name, file.driveFileId)}
             >
-              Download to E:
+              Download to this computer
             </button>
           </li>
         ))}

@@ -37,6 +37,8 @@ export interface RecoveredFile {
   path: string
   /** When it was restored. */
   at: string
+  /** Why it cannot be brought back yet, when there is a reason. */
+  blocked?: string
 }
 
 /** What a run did. */
@@ -92,6 +94,10 @@ export interface IpcDeps {
   resetConnection(): Promise<void>
   /** Archive the manifest and start a new one, for a different account. */
   startFreshManifest(): Promise<void>
+  /** Take a new schedule into account, without waiting for a restart. */
+  applySchedule(): Promise<void>
+  /** Start the app with Windows, or stop doing so. */
+  applyAutoLaunch(enabled: boolean): void
   /** Called when the run as a whole fails. */
   onError?: (message: string) => void
 }
@@ -142,8 +148,15 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle('drive-mirror:get-settings', () => deps.getSettings())
 
-  ipcMain.handle('drive-mirror:save-settings', (_event, patch: Partial<Settings>) =>
-    deps.saveSettings(patch),
+  ipcMain.handle(
+    'drive-mirror:save-settings',
+    async (_event, patch: Partial<Settings>) => {
+      const next = await deps.saveSettings(patch)
+      if (patch.startWithWindows !== undefined) {
+        deps.applyAutoLaunch(patch.startWithWindows)
+      }
+      return next
+    },
   )
 
   ipcMain.handle(
@@ -176,8 +189,15 @@ export function registerIpc(deps: IpcDeps): void {
       if (problems.length > 0) {
         return { ok: false, message: problems.map((p) => p.message).join(' ') }
       }
+      // A mirror the user removed and is putting back replaces the old
+      // entry. Two entries with the same name would make the app forget
+      // the wrong one.
+      const kept = settings.mirrors.filter(
+        (m) =>
+          !(m.removedAt && m.name.toLowerCase() === config.name.toLowerCase()),
+      )
       await deps.saveSettings({
-        mirrors: [...settings.mirrors, { ...config, enabled: true }],
+        mirrors: [...kept, { ...config, enabled: true }],
       })
       return { ok: true }
     },
@@ -251,6 +271,8 @@ export function registerIpc(deps: IpcDeps): void {
       // must not wipe the rest.
       const next = { ...settings.schedule, ...patch }
       await deps.saveSettings({ schedule: next })
+      // The app has to act on the change now, not at the next start-up.
+      await deps.applySchedule()
       return next
     },
   )
