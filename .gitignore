@@ -1,10 +1,27 @@
+# Dependencies and build output
 node_modules/
 out/
 dist/
-*.log
+*.tsbuildinfo
 
-# Never commit OAuth credentials
+# Logs
+*.log
+npm-debug.log*
+
+# Never commit OAuth credentials, or anything else that is secret
 *.client_secret*.json
 client_secret*.json
+*.credentials.json
+tokens.json
 .env
 .env.*
+
+# The local state the app writes for itself
+.superpowers/sdd/*/task-*.md
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

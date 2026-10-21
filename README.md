@@ -3,6 +3,9 @@
 Mirrors four folders on your `E:` drive up to Google Drive, so that a second
 machine - or a lost laptop - still has your work.
 
+[![CI](https://github.com/nnagarr/drive-mirror/actions/workflows/ci.yml/badge.svg)](https://github.com/nnagarr/drive-mirror/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 The four trees are mirrored exactly:
 
 | On this computer | On Drive |
@@ -133,7 +136,22 @@ The app is a single decision core and a thin shell around it.
   the runner that ties the two together.
 - `src/renderer/` - the interface. It has no file access and no network
   access; it calls the main process through a fixed set of channels.
+- `test/` - the tests.
+- `docs/superpowers/` - the design document and the implementation plan the
+  code was built from. Worth reading before changing a rule.
 
 The test suite includes an **exhaustiveness matrix**: every combination of
 the engine's inputs, checked against the rules the design promises. It is
 the test that finds the gaps a per-rule test cannot see.
+
+```bash
+npm install
+npm test          # the test suite
+npm run typecheck # both TypeScript projects
+npm run dev       # run it from source
+npm run dist      # build the Windows installer into dist\
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is laid out, and
+[SECURITY.md](SECURITY.md) for what the app holds and how to report a
+problem.
