@@ -62,6 +62,12 @@ describe('mirror configuration', () => {
     expect(isValidDrivePath(`Archive/${'a'.repeat(256)}`)).toBe(false)
   })
 
+  it('counts a Drive path segment in characters, not in code units', () => {
+    // An emoji is one character, even though it is two code units.
+    expect(isValidDrivePath('\u{1f600}'.repeat(255))).toBe(true)
+    expect(isValidDrivePath('\u{1f600}'.repeat(256))).toBe(false)
+  })
+
   it('refuses a Drive path segment that ends in a space or a dot', () => {
     expect(isValidDrivePath('Photos ')).toBe(false)
     expect(isValidDrivePath('Photos.')).toBe(false)
@@ -96,6 +102,21 @@ describe('mirror configuration', () => {
     expect(isValidDrivePath(suggestDrivePath('Photos '))).toBe(true)
     expect(isValidDrivePath(suggestDrivePath('Photos.'))).toBe(true)
     expect(isValidDrivePath(suggestDrivePath('a'.repeat(300)))).toBe(true)
+  })
+
+  it('cuts a long name on a character boundary', () => {
+    const suggestion = suggestDrivePath('\u{1f600}'.repeat(300))
+    // The suggestion has to survive a trip through UTF-8, so the cut may
+    // not land in the middle of a character.
+    expect(Buffer.from(suggestion, 'utf8').toString('utf8')).toBe(suggestion)
+    expect(Array.from(suggestion).length).toBe(255)
+    expect(isValidDrivePath(suggestion)).toBe(true)
+  })
+
+  it('suggests a Drive path for a name that is only a non-breaking space', () => {
+    expect(isValidMirrorName('\u00a0')).toBe(true)
+    expect(isValidDrivePath(suggestDrivePath('\u00a0'))).toBe(true)
+    expect(isValidDrivePath(suggestDrivePath('\ufeff'))).toBe(true)
   })
 
   it('refuses a candidate whose root is not a folder on this computer', () => {

@@ -80,17 +80,24 @@ export function isValidMirrorName(name: string): boolean {
  * True when `drivePath` is a folder path under My Drive.
  *
  * The path is relative to My Drive and its segments are separated by `/`.
- * Every segment follows Drive's rules (spec §12 A14): it is not empty, it
- * is not `.` or `..`, it holds no `/` or `\` and no control character, it
- * is at most 255 characters long, and it does not end in a space or a
- * dot. A segment that breaks a rule is a folder the app could not create
- * on Drive, so the mirror is refused before it is configured.
+ * Every segment follows the same rule as a mirror name, plus Drive's own
+ * limits (spec §12 A14): it is not empty, it is not `.` or `..`, it holds
+ * no `/` or `\` and no control character, it is at most 255 characters
+ * long, and it does not end in a space or a dot. A segment that breaks a
+ * rule is a folder the app could not create on Drive, so the mirror is
+ * refused before it is configured.
+ *
+ * The rule is deliberately stricter than Drive's own, which allows more:
+ * a segment may not hold a character Windows forbids in a name
+ * (`: * ? " < > |`) either. That can only refuse a path, never admit one
+ * that cannot be used, and `suggestDrivePath` rewrites those characters
+ * to `-`, so the user is always offered a path that works.
  */
 export function isValidDrivePath(drivePath: string): boolean {
   if (drivePath.length === 0) return false
   for (const segment of drivePath.split('/')) {
     if (segment.length === 0) return false
-    if (segment.length > MAX_SEGMENT_LENGTH) return false
+    if (characterCount(segment) > MAX_SEGMENT_LENGTH) return false
     if (segment === '.' || segment === '..') return false
     if (segment.includes('\\')) return false
     if (ILLEGAL_SEGMENT_CHARS.test(segment)) return false
@@ -192,12 +199,12 @@ export function validateMirror(
  * The name is the suggestion, and a name that carries a character a Drive
  * folder cannot hold cannot be part of a Drive path either, so those
  * characters become `-`. The suggestion is shortened to what Drive can
- * hold and stripped of the trailing space or dot Drive would not keep, so
- * it is a path `isValidDrivePath` accepts.
+ * hold - on a character boundary, so a character is never cut in half -
+ * and stripped of the trailing space or dot Drive would not keep, so it is
+ * a path `isValidDrivePath` accepts.
  *
- * The one name with nothing to suggest is one that is nothing but `.`,
- * `..` or spaces: it reduces to nothing, and `isValidMirrorName` refuses
- * such a name anyway.
+ * The only names with nothing to suggest are the empty name and a name of
+ * nothing but spaces, and `isValidMirrorName` refuses both.
  */
 export function suggestDrivePath(name: string): string {
   return name
@@ -230,14 +237,36 @@ export function mirrorConfigsFromManifest(manifest: Manifest): MirrorConfig[] {
   return configs
 }
 
-/** A Drive folder name: the characters Drive can hold, and no longer than Drive allows. */
+/**
+ * A Drive folder name: the characters Drive can hold, and no longer than
+ * Drive allows.
+ *
+ * The spaces the validator would refuse are gone - the ASCII ones - and
+ * the other spaces stay, so a name that is nothing but a non-breaking
+ * space still suggests something. The cut to what Drive can hold is made
+ * on a character boundary, so the result is always a string that can be
+ * encoded as UTF-8.
+ */
 function driveSegment(segment: string): string {
   const cleaned = segment
     .replace(/[<>:"\\|?*]/g, '-')
     .replace(/[\u0000-\u001f]/g, '-')
-    .trim()
-  const shortened = cleaned.length > MAX_SEGMENT_LENGTH ? cleaned.slice(0, MAX_SEGMENT_LENGTH) : cleaned
+    .replace(/^ +/, '')
+  const characters = Array.from(cleaned)
+  const shortened = characters.length > MAX_SEGMENT_LENGTH
+    ? characters.slice(0, MAX_SEGMENT_LENGTH).join('')
+    : cleaned
   return shortened.replace(/[ .]+$/, '')
+}
+
+/**
+ * The number of characters in a string, counted the way Drive counts them.
+ *
+ * A character is a code point, so an emoji is one character and not two,
+ * and a string cut at a character boundary is a string that can be encoded.
+ */
+function characterCount(text: string): number {
+  return Array.from(text).length
 }
 
 /** A root in a form two roots can be compared in. */
