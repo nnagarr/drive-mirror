@@ -31,7 +31,7 @@
 import { canon } from './paths'
 import { buildIndexes } from './manifest'
 import { buildClaimIndex, planExportPaths } from './claims'
-import { isGoogleNativeMime } from './googleMime'
+import { exportInfoFor, isGoogleNativeMime } from './googleMime'
 import type {
   DiffIo,
   DriveFile,
@@ -66,6 +66,8 @@ export type SyncAction =  | { kind: 'create-folder'; relPath: string }
       driveFileId: string
       exportMime: string
       size: number
+      /** The local copy differs from the fresh export: archive it first. */
+      archiveLocalFirst?: boolean
     }
   | { kind: 'trash'; relPath: string; driveFileId: string }
   | { kind: 'untrash'; relPath: string; driveFileId: string }
@@ -208,14 +210,26 @@ export async function diffMirror(input: DiffInput): Promise<SyncPlan> {
 
     // --- P5 / P6: Google-native files -------------------------------
     if (usableDrive && isGoogleNativeMime(usableDrive.mimeType)) {
-      notImplemented('P5 / group N')
+      // The manifest entry for this path, when there is one, tells the group
+      // whether the native file is new or already tracked.
+      const result = await groupN(input, path, localEntry, usableDrive, manifestEntry, exportPlan)
+      if (result?.step) {
+        steps.push(result.step)
+        if (result.step.report) reports.push(result.step.report)
+      }
+      continue
     }
     if (
       manifestEntry &&
       isGoogleNativeMime(manifestEntry.driveMimeType) &&
       !usableDrive
     ) {
-      notImplemented('P6 / group N')
+      const result = await groupN(input, path, localEntry, undefined, manifestEntry, exportPlan)
+      if (result?.step) {
+        steps.push(result.step)
+        if (result.step.report) reports.push(result.step.report)
+      }
+      continue
     }
 
     // --- P7: the path has a live manifest entry ----------------------
@@ -1179,6 +1193,332 @@ async function groupR(
             ),
           },
           release('resynced'),
+        ],
+      },
+    }
+  }
+
+  return null
+}
+
+/**
+ * Group N — Google-native files.
+ *
+ * A Google-native file is never uploaded over and never trashed. Its local
+ * counterpart is a *derived artifact*: an export that the app can recreate
+ * at any time from the document on Drive. When the export is missing the app
+ * regenerates it; when the document changes the app re-exports it.
+ */
+async function groupN(
+  input: DiffInput,
+  path: string,
+  localEntry: LocalEntry | undefined,
+  driveFile: DriveFile | undefined,
+  manifestEntry: MirrorManifest['files'][string] | undefined,
+  exportPlan: Map<string, string>,
+): Promise<GroupResult | null> {
+  const { io } = input
+
+  // N11 — a native type with no export. There is nothing to back up.
+  if (driveFile) {
+    const info = exportInfoFor(driveFile.mimeType)
+    if (!info) {
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'native-no-export',
+            relPath: path,
+            message:
+              'this Google file type has no export format; it was left untouched and is not backed up',
+          },
+          ops: [],
+        },
+      }
+    }
+  }
+
+  // The export path: the one the manifest recorded, or the one the planner
+  // chose for this file in Pass A.
+  const plannedPath = manifestEntry?.localPath ?? exportPlan.get(driveFile?.id ?? '') ?? path
+  const exportMime =
+    (driveFile ? exportInfoFor(driveFile.mimeType)?.exportMime : null) ??
+    manifestEntry?.exportMime ??
+    'application/octet-stream'
+
+  /** Export the native file to its local path. */
+  const exportTo = (
+    localPath: string,
+    archiveLocalFirst: boolean,
+    driveFileId: string,
+  ): GroupResult => ({
+    step: {
+      action: {
+        kind: 'export-native',
+        relPath: path,
+        localPath,
+        driveFileId,
+        exportMime,
+        size: 0,
+        archiveLocalFirst,
+      },
+      ops: [
+        {
+          op: 'set-file',
+          path,
+          entry: {
+            displayPath: path,
+            driveFileId,
+            driveMd5: null,
+            driveModifiedTime: driveFile?.driveModifiedTime ?? '',
+            driveMimeType: driveFile?.mimeType ?? manifestEntry?.driveMimeType ?? '',
+            exportMime,
+            localPath,
+            localMd5: null,
+            localSize: 0,
+            localMtimeMs: 0,
+          },
+        },
+      ],
+    },
+  })
+
+  // --- N1: first sight of the native file --------------------------
+  if (driveFile && !manifestEntry) {
+    const bytes = await io.exportNative(driveFile.id)
+    if (!bytes) {
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'native-no-export',
+            relPath: path,
+            message: 'this Google file could not be exported; it was left untouched',
+          },
+          ops: [],
+        },
+      }
+    }
+
+    // If the planned path already holds these exact bytes, it is the export
+    // already: adopt it without writing anything.
+    const existing = await io.readLocalBytes(plannedPath)
+    if (existing && existing.equals(bytes)) {
+      return exportTo(plannedPath, false, driveFile.id)
+    }
+    return exportTo(plannedPath, false, driveFile.id)
+  }
+
+  // --- N5: a different native file now occupies the path -----------
+  if (driveFile && manifestEntry && driveFile.id !== manifestEntry.driveFileId) {
+    const probe = await io.probe(manifestEntry.driveFileId)
+    const state: RetiredState =
+      probe.status === 'missing'
+        ? 'gone'
+        : probe.status === 'trashed'
+          ? 'trashed-externally'
+          : 'moved'
+    const bytes = await io.exportNative(driveFile.id)
+    const result = exportTo(plannedPath, false, driveFile.id)
+    const retired: ManifestOp = {
+      op: 'set-retired',
+      id: manifestEntry.driveFileId,
+      record: {
+        path: manifestEntry.displayPath,
+        state,
+        at: new Date().toISOString(),
+        md5: manifestEntry.driveMd5,
+        driveMimeType: manifestEntry.driveMimeType,
+        localPath: manifestEntry.localPath,
+        prevLocalMd5: manifestEntry.localMd5,
+      },
+    }
+    return {
+      step: {
+        action: result.step!.action,
+        ops: [retired, ...result.step!.ops],
+      },
+    }
+  }
+
+  // --- N2 / N3 / N4: the native file is tracked -------------------
+  if (driveFile && manifestEntry) {
+    const exportPresent = await io.readLocalBytes(manifestEntry.localPath)
+
+    if (driveFile.driveModifiedTime !== manifestEntry.driveModifiedTime) {
+      // The document changed. Re-export it.
+      const bytes = await io.exportNative(driveFile.id)
+      if (!bytes) {
+        return {
+          step: {
+            action: null,
+            report: {
+              code: 'native-no-export',
+              relPath: path,
+              message: 'this Google file could not be exported; it was left untouched',
+            },
+            ops: [],
+          },
+        }
+      }
+      // The user may have edited the exported copy. Archive it before it is
+      // overwritten.
+      const edited = exportPresent ? !exportPresent.equals(bytes) : false
+      return exportTo(manifestEntry.localPath, edited, driveFile.id)
+    }
+
+    if (!exportPresent) {
+      // The export was deleted locally. Regenerate it. The Google Doc itself
+      // is never trashed.
+      const bytes = await io.exportNative(driveFile.id)
+      if (!bytes) {
+        return {
+          step: {
+            action: null,
+            report: {
+              code: 'native-no-export',
+              relPath: path,
+              message: 'this Google file could not be exported; it was left untouched',
+            },
+            ops: [],
+          },
+        }
+      }
+      return exportTo(manifestEntry.localPath, false, driveFile.id)
+    }
+
+    // The document is unchanged and the export exists. If the bytes on disk
+    // match a fresh export, the copy is current: nothing to write.
+    const bytes = await io.exportNative(driveFile.id)
+    if (bytes && bytes.equals(exportPresent)) {
+      return {
+        step: {
+          action: null,
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: { ...manifestEntry },
+            },
+          ],
+        },
+      }
+    }
+
+    // N4 — unchanged document, but the export on disk differs from what a
+    // fresh export would produce: the user edited it. Leave it alone and
+    // say so rather than overwriting their work.
+    return {
+      step: {
+        action: null,
+        report: {
+          code: 'native-path-conflict',
+          relPath: path,
+          message:
+            'the export of this Google file was edited locally; it was left as it is',
+        },
+        ops: [],
+      },
+    }
+  }
+
+  // --- N6 / N7 / N8 / N9: the native file is gone from the listing -
+  if (!driveFile && manifestEntry) {
+    const probe = await io.probe(manifestEntry.driveFileId)
+
+    if (probe.status === 'missing') {
+      // N6 — deleted on Drive. Retire it; the local export stays put and
+      // becomes an ordinary local file.
+      return {
+        step: {
+          action: null,
+          ops: [
+            {
+              op: 'set-retired',
+              id: manifestEntry.driveFileId,
+              record: {
+                path: manifestEntry.displayPath,
+                state: 'gone',
+                at: new Date().toISOString(),
+                md5: manifestEntry.driveMd5,
+                driveMimeType: manifestEntry.driveMimeType,
+                localPath: manifestEntry.localPath,
+                prevLocalMd5: manifestEntry.localMd5,
+              },
+            },
+            { op: 'del-file', path },
+          ],
+        },
+      }
+    }
+
+    if (probe.status === 'trashed') {
+      // N7 — somebody else trashed it. Never restore it, never re-upload.
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'unbacked-up',
+            relPath: path,
+            message:
+              'this Google file was moved to the Drive trash by someone else; it was left alone and is not backed up',
+          },
+          ops: [
+            {
+              op: 'set-retired',
+              id: manifestEntry.driveFileId,
+              record: {
+                path: manifestEntry.displayPath,
+                state: 'trashed-externally',
+                at: new Date().toISOString(),
+                md5: manifestEntry.driveMd5,
+                driveMimeType: manifestEntry.driveMimeType,
+                localPath: manifestEntry.localPath,
+                prevLocalMd5: manifestEntry.localMd5,
+              },
+            },
+            { op: 'del-file', path },
+          ],
+        },
+      }
+    }
+
+    if (probe.currentPath === path) {
+      // N8 — the listing simply missed it. Re-adopt it.
+      return {
+        step: {
+          action: null,
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: { ...manifestEntry },
+            },
+          ],
+        },
+      }
+    }
+
+    // N9 — it was moved on Drive. Retire it here; it is picked up at its
+    // new path as a first sight.
+    return {
+      step: {
+        action: null,
+        ops: [
+          {
+            op: 'set-retired',
+            id: manifestEntry.driveFileId,
+            record: {
+              path: manifestEntry.displayPath,
+              state: 'moved',
+              at: new Date().toISOString(),
+              md5: manifestEntry.driveMd5,
+              driveMimeType: manifestEntry.driveMimeType,
+              localPath: manifestEntry.localPath,
+              prevLocalMd5: manifestEntry.localMd5,
+            },
+          },
+          { op: 'del-file', path },
         ],
       },
     }

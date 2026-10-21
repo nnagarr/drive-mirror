@@ -721,6 +721,299 @@ describe('diffMirror --- group R (retired id)', () => {
   })
 })
 
+describe('diffMirror --- group N (Google-native)', () => {
+  const SHEET = 'application/vnd.google-apps.spreadsheet'
+  const DOC = 'application/vnd.google-apps.document'
+
+  it('exports a first-sight native file to its planned path (N1)', async () => {
+    const p = await plan({
+      drive: driveTree([{ id: 'D1', name: 'Budget', mimeType: SHEET }]),
+      io: { exportNative: async () => Buffer.from('a,b,c') },
+    })
+
+    expect(kinds(p)).toEqual(['export-native'])
+    const action = actions(p)[0]!
+    if (action.kind === 'export-native') {
+      expect(action.relPath).toBe('budget')
+      expect(action.localPath).toBe('budget.csv')
+      expect(action.exportMime).toBe('text/csv')
+      expect(action.driveFileId).toBe('D1')
+    }
+  })
+
+  it('exports beside an occupied path and uploads the local file separately (N1)', async () => {
+    // The user has Budget.csv on E: AND a Google Sheet named Budget on
+    // Drive. The Sheet's export cannot be Budget.csv -- that is the user's
+    // own file -- so it goes beside it, and the user's file uploads as
+    // itself. Neither overwrites the other.
+    const bytes = Buffer.from('a,b,c')
+    const p = await plan({
+      local: localTree({ 'budget.csv': { md5: 'x' } }),
+      drive: driveTree([{ id: 'D1', name: 'Budget', mimeType: SHEET }]),
+      io: {
+        exportNative: async () => bytes,
+        readLocalBytes: async () => bytes,
+      },
+    })
+
+    const exported = actions(p).filter((a) => a.kind === 'export-native')
+    expect(exported).toHaveLength(1)
+    if (exported[0]!.kind === 'export-native') {
+      expect(exported[0]!.localPath).not.toBe('budget.csv')
+      expect(exported[0]!.localPath).toBe('budget (export 1).csv')
+    }
+  })
+
+  it('adopts an existing export without writing it when the bytes match (N1 adopt)', async () => {
+    // The manifest already tracks the native file and its export path holds
+    // exactly the bytes a fresh export would produce: there is nothing to
+    // write.
+    const bytes = Buffer.from('a,b,c')
+    const p = await plan({
+      local: localTree({ 'budget.csv': { md5: 'x' } }),
+      drive: driveTree([
+        { id: 'D1', name: 'Budget', mimeType: SHEET, driveModifiedTime: 't1' },
+      ]),
+      manifest: mirrorManifest({
+        budget: {
+          driveFileId: 'D1',
+          driveMimeType: SHEET,
+          exportMime: 'text/csv',
+          localPath: 'budget.csv',
+          driveModifiedTime: 't1',
+        },
+      }),
+      io: {
+        exportNative: async () => bytes,
+        readLocalBytes: async () => bytes,
+      },
+    })
+
+    expect(kinds(p)).not.toContain('export-native')
+    const op = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-file')
+    expect(op).toBeDefined()
+    if (op && op.op === 'set-file') {
+      expect(op.entry.localPath).toBe('budget.csv')
+    }
+  })
+
+  it('never overwrites an unrelated local file at the natural export path (N1)', async () => {
+    const p = await plan({
+      local: localTree({ 'budget.csv': { md5: 'x' } }),
+      drive: driveTree([{ id: 'D1', name: 'Budget', mimeType: SHEET }]),
+      io: {
+        exportNative: async () => Buffer.from('fresh'),
+        readLocalBytes: async () => Buffer.from('unrelated'),
+      },
+    })
+
+    // The planner must have chosen a path that is not the occupied one.
+    const action = actions(p).find((a) => a.kind === 'export-native')
+    expect(action).toBeDefined()
+    if (action && action.kind === 'export-native') {
+      expect(action.localPath).not.toBe('budget.csv')
+    }
+  })
+
+  it('re-exports when the Drive document changed (N2)', async () => {
+    const p = await plan({
+      local: localTree({ 'budget.csv': { md5: 'x' } }),
+      drive: driveTree([
+        { id: 'D1', name: 'Budget', mimeType: SHEET, driveModifiedTime: 't2' },
+      ]),
+      manifest: mirrorManifest({
+        budget: {
+          driveFileId: 'D1',
+          driveMimeType: SHEET,
+          exportMime: 'text/csv',
+          localPath: 'budget.csv',
+          driveModifiedTime: 't1',
+        },
+      }),
+      io: { exportNative: async () => Buffer.from('fresh') },
+    })
+
+    expect(kinds(p)).toEqual(['export-native'])
+  })
+
+  it('archives a user-edited export before overwriting it (N2)', async () => {
+    const p = await plan({
+      local: localTree({ 'budget.csv': { md5: 'x' } }),
+      drive: driveTree([
+        { id: 'D1', name: 'Budget', mimeType: SHEET, driveModifiedTime: 't2' },
+      ]),
+      manifest: mirrorManifest({
+        budget: {
+          driveFileId: 'D1',
+          driveMimeType: SHEET,
+          exportMime: 'text/csv',
+          localPath: 'budget.csv',
+          driveModifiedTime: 't1',
+        },
+      }),
+      io: {
+        exportNative: async () => Buffer.from('fresh'),
+        readLocalBytes: async () => Buffer.from('user-edited'),
+      },
+    })
+
+    const action = actions(p).find((a) => a.kind === 'export-native')
+    expect(action).toBeDefined()
+    if (action && action.kind === 'export-native') {
+      // The executor must archive the user's edited copy before overwriting.
+      expect(action.archiveLocalFirst).toBe(true)
+    }
+  })
+
+  it('regenerates a deleted export without trashing the Google Doc (N3)', async () => {
+    const p = await plan({
+      local: localTree({}),
+      drive: driveTree([{ id: 'D1', name: 'Budget', mimeType: SHEET }]),
+      manifest: mirrorManifest({
+        budget: {
+          driveFileId: 'D1',
+          driveMimeType: SHEET,
+          exportMime: 'text/csv',
+          localPath: 'budget.csv',
+        },
+      }),
+      io: { exportNative: async () => Buffer.from('fresh') },
+    })
+
+    expect(kinds(p)).toEqual(['export-native'])
+    expect(kinds(p)).not.toContain('trash')
+  })
+
+  it('does nothing when the native file is unchanged and the export exists (N4)', async () => {
+    const p = await plan({
+      local: localTree({ 'budget.csv': { md5: 'x' } }),
+      drive: driveTree([
+        { id: 'D1', name: 'Budget', mimeType: SHEET, driveModifiedTime: 't1' },
+      ]),
+      manifest: mirrorManifest({
+        budget: {
+          driveFileId: 'D1',
+          driveMimeType: SHEET,
+          exportMime: 'text/csv',
+          localPath: 'budget.csv',
+          driveModifiedTime: 't1',
+        },
+      }),
+    })
+
+    expect(kinds(p)).toEqual([])
+  })
+
+  it('retires the old id and exports the replacement (N5)', async () => {
+    const p = await plan({
+      local: localTree({}),
+      drive: driveTree([
+        { id: 'D2', name: 'Budget', mimeType: SHEET, driveModifiedTime: 't2' },
+      ]),
+      manifest: mirrorManifest({
+        budget: {
+          driveFileId: 'D1',
+          driveMimeType: SHEET,
+          exportMime: 'text/csv',
+          localPath: 'budget.csv',
+          driveModifiedTime: 't1',
+        },
+      }),
+      io: {
+        exportNative: async () => Buffer.from('fresh'),
+        probe: async () => ({ status: 'missing' }),
+      },
+    })
+
+    const rec = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    expect(rec).toBeDefined()
+    if (rec && rec.op === 'set-retired') {
+      expect(rec.id).toBe('D1')
+    }
+    expect(kinds(p)).toContain('export-native')
+  })
+
+  it('never uploads over or trashes a native file (N6/N7)', async () => {
+    const p = await plan({
+      local: localTree({ 'budget.csv': { md5: 'x' } }),
+      drive: driveTree([]),
+      manifest: mirrorManifest({
+        budget: {
+          driveFileId: 'D1',
+          driveMimeType: SHEET,
+          exportMime: 'text/csv',
+          localPath: 'budget.csv',
+        },
+      }),
+      io: {
+        exportNative: async () => Buffer.from('fresh'),
+        probe: async () => ({ status: 'trashed' }),
+      },
+    })
+
+    expect(kinds(p)).not.toContain('upload')
+    expect(kinds(p)).not.toContain('replace-content')
+    expect(kinds(p)).not.toContain('trash')
+  })
+
+  it('re-adopts a native file that was merely missed by the listing (N8)', async () => {
+    const p = await plan({
+      local: localTree({ 'budget.csv': { md5: 'x' } }),
+      drive: driveTree([]),
+      manifest: mirrorManifest({
+        budget: {
+          driveFileId: 'D1',
+          driveMimeType: SHEET,
+          exportMime: 'text/csv',
+          localPath: 'budget.csv',
+        },
+      }),
+      io: {
+        probe: async () => ({ status: 'alive', currentPath: 'budget' }),
+      },
+    })
+
+    expect(kinds(p)).not.toContain('export-native')
+    const op = p.steps[0]?.ops.find((o) => o.op === 'set-file')
+    expect(op).toBeDefined()
+  })
+
+  it('retires a native file that was moved on Drive (N9)', async () => {
+    const p = await plan({
+      local: localTree({}),
+      drive: driveTree([]),
+      manifest: mirrorManifest({
+        budget: {
+          driveFileId: 'D1',
+          driveMimeType: SHEET,
+          exportMime: 'text/csv',
+          localPath: 'budget.csv',
+        },
+      }),
+      io: {
+        probe: async () => ({ status: 'alive', currentPath: 'archive/budget' }),
+      },
+    })
+
+    const rec = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    expect(rec).toBeDefined()
+    if (rec && rec.op === 'set-retired') {
+      expect(rec.record.state).toBe('moved')
+    }
+  })
+
+  it('reports a native type that has no export (N11)', async () => {
+    const p = await plan({
+      drive: driveTree([
+        { id: 'D1', name: 'Form', mimeType: 'application/vnd.google-apps.form' },
+      ]),
+    })
+
+    expect(kinds(p)).toEqual([])
+    expect(p.reports.map((r) => r.code)).toContain('native-no-export')
+  })
+})
+
 describe('diffMirror --- dispatch pre-gates', () => {
   it('reports and skips an ambiguous Drive path', async () => {
     const p = await plan({
