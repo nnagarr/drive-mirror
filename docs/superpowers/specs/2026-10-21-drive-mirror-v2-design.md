@@ -518,9 +518,13 @@ Answer: `MirrorCard` gains `recovered: Array<{ driveFileId: string; path: string
 
 **A14 — which legality rule applies to what.** (§7.1)
 
-- The **mirror name** is a manifest key and a label. It is never written to the local disk. It must not be empty, must not be `.` or `..`, must not contain `/`, `\` or a control character, and must not end in a space or a dot.
-- A **Drive path segment** follows Drive's rules: non-empty, not `.` or `..`, no `/` or `\`, no control character, at most 255 characters, and not ending in a space or a dot.
-- `isRepresentableOnWindows` in `src/core/paths.ts` is about **local** filenames and does **not** apply here: the Drive folder's name never becomes a local filename.
+*Corrected after the code was written. The original wording of this clause was wrong about one thing, and the correction makes the rule stricter, not looser.*
+
+- The **mirror name** is a manifest key and a label — but it **does** reach the local disk: it is the directory name under the superseded archive (`src/core/sync.ts:406`, `join(archiveDir, sanitizePathSegment(mirrorName), …)`). It only gets there through `sanitizePathSegment`, which turns the characters Windows forbids into `_`. Because of that, the name follows the **Windows** rule: not empty, not `.` or `..`, none of `< > : " / \ | ? *`, no control character, and not ending in a space or a dot.
+- A **Drive path segment** follows the same rule plus Drive's own limits: non-empty, not `.` or `..`, no `/` or `\`, no control character, at most 255 characters, and not ending in a space or a dot.
+- `isRepresentableOnWindows` in `src/core/paths.ts` is about **Drive file names that have to be mirrored onto the local disk** — that is the sync engine's job, not this module's. What applies to a mirror name here is `sanitizePathSegment`.
+- **The strict rule is deliberate.** It can only *refuse* a name, never admit one that cannot be used, and `suggestDrivePath` rewrites the offending characters to `-`, so the user is always offered a path that works. The alternative — Drive's own more permissive list — would buy a mirror named `Sales: 2026` at the cost of a name that reaches the disk through a sanitiser, and a default Drive path that differs from the name it came from. The trade is not worth it.
+
 
 ---
 
