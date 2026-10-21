@@ -132,6 +132,185 @@ describe('diffMirror — group E (local-only)', () => {
   })
 })
 
+describe('diffMirror — group B (live manifest entry)', () => {
+  it('trashes the Drive copy when the local file is deleted (B0)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': 'absent' }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1' } }),
+    })
+
+    const trash = actions(p).filter((a) => a.kind === 'trash')
+    expect(trash).toHaveLength(1)
+    const action = trash[0]!
+    if (action.kind === 'trash') {
+      expect(action.driveFileId).toBe('D1')
+      expect(action.relPath).toBe('a.psd')
+    }
+
+    const retired = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    expect(retired).toBeDefined()
+    if (retired && retired.op === 'set-retired') {
+      expect(retired.id).toBe('D1')
+      expect(retired.record.state).toBe('trashed')
+    }
+    expect(p.steps.flatMap((s) => s.ops).some((o) => o.op === 'del-file' && o.path === 'a.psd')).toBe(true)
+  })
+
+  it('never trashes when the local path is unreadable (B0 guard)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': 'unknown' }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1' } }),
+    })
+
+    expect(kinds(p)).not.toContain('trash')
+  })
+
+  it('does not trash during a rebase (B0 mergeOnly guard)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': 'absent' }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1' } }),
+      mergeOnly: true,
+    })
+
+    expect(kinds(p)).not.toContain('trash')
+    const retired = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    expect(retired).toBeUndefined()
+  })
+
+  it('uploads local changes in place keeping the Drive id (B1 local-changed)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm2' } }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+    })
+
+    expect(kinds(p)).toEqual(['replace-content'])
+    const action = actions(p)[0]!
+    if (action.kind === 'replace-content') {
+      expect(action.driveFileId).toBe('D1')
+      expect(action.md5).toBe('m2')
+    }
+  })
+
+  it('downloads Drive changes (B1 drive-changed)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm1' } }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm2' }]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+    })
+
+    expect(kinds(p)).toEqual(['download'])
+  })
+
+  it('uploads local changes when both changed (B1 both-changed)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm2' } }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm3' }]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+    })
+
+    expect(kinds(p)).toEqual(['replace-content'])
+  })
+
+  it('does nothing when neither side changed (B1 neither)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm1' } }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+    })
+
+    expect(kinds(p)).toEqual([])
+  })
+
+  it('downloads the Drive version when driveWins and both changed', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm2' } }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm3' }]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+      driveWins: true,
+    })
+
+    expect(kinds(p)).toEqual(['download'])
+  })
+
+  it('re-adopts a Drive file that was merely missed by the listing (B3 alive-same-path)', async () => {
+    // The listing did not return the file, but a probe of its id finds it
+    // alive at the same path. It must be re-adopted, not re-uploaded.
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm1' } }),
+      drive: driveTree([]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+      io: diffIo({ probe: async () => ({ status: 'alive', currentPath: 'a.psd' }) }),
+    })
+
+    expect(kinds(p)).toEqual([])
+    const op = p.steps[0]?.ops.find((o) => o.op === 'set-file')
+    expect(op).toBeDefined()
+  })
+
+  it('retires the tracked id as moved when the Drive file moved (B2)', async () => {
+    // A different Drive file now occupies the path, and a probe of the
+    // tracked id finds it alive somewhere else.
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm1' } }),
+      drive: driveTree([{ id: 'D2', name: 'a.psd', md5: 'm2' }]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+      io: diffIo({ probe: async () => ({ status: 'alive', currentPath: 'b.psd' }) }),
+    })
+
+    const retired = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    expect(retired).toBeDefined()
+    if (retired && retired.op === 'set-retired') {
+      expect(retired.id).toBe('D1')
+      expect(retired.record.state).toBe('moved')
+    }
+  })
+
+  it('reports an unbacked-up file when someone else trashed it (B3)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm1' } }),
+      drive: driveTree([]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+      io: diffIo({ probe: async () => ({ status: 'trashed' }) }),
+    })
+
+    expect(kinds(p)).not.toContain('upload')
+    expect(p.reports.map((r) => r.code)).toContain('unbacked-up')
+    const retired = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    if (retired && retired.op === 'set-retired') {
+      expect(retired.record.state).toBe('trashed-externally')
+    }
+  })
+
+  it('uploads a new Drive file when the old one is gone for good (B3 404)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm1' } }),
+      drive: driveTree([]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+      io: diffIo({ probe: async () => ({ status: 'missing' }) }),
+    })
+
+    expect(kinds(p)).toEqual(['upload'])
+  })
+
+  it('retires both sides when the file is gone from both (B4)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': 'absent' }),
+      drive: driveTree([]),
+      manifest: mirrorManifest({ 'a.psd': { driveFileId: 'D1', driveMd5: 'm1', localMd5: 'm1' } }),
+    })
+
+    const retired = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    if (retired && retired.op === 'set-retired') {
+      expect(retired.record.state).toBe('gone')
+    }
+    expect(p.steps.flatMap((s) => s.ops).some((o) => o.op === 'del-file')).toBe(true)
+  })
+})
+
 describe('diffMirror — dispatch pre-gates', () => {
   it('reports and skips an ambiguous Drive path', async () => {
     const p = await plan({

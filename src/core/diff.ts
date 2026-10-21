@@ -41,6 +41,8 @@ import type {
   ProbeResult,
   Report,
   ReportCode,
+  RetiredRecord,
+  RetiredState,
 } from './types'
 
 /** A single thing the executor must do. */
@@ -208,14 +210,21 @@ export async function diffMirror(input: DiffInput): Promise<SyncPlan> {
 
     // --- P7: the path has a live manifest entry ----------------------
     if (manifestEntry) {
-      notImplemented('P7 / group B')
+      const result = await groupB(input, path, localEntry, manifestEntry, usableDrive)
+      if (result?.step) {
+        steps.push(result.step)
+        if (result.step.report) reports.push(result.step.report)
+      }
+      continue
     }
 
     // --- P8: no manifest entry, Drive file present -------------------
     if (usableDrive) {
       const result = await groupC(input, path, localEntry, usableDrive)
-      if (result?.step) steps.push(result.step)
-      if (result?.report) reports.push(result.report)
+      if (result?.step) {
+        steps.push(result.step)
+        if (result.step.report) reports.push(result.step.report)
+      }
       continue
     }
 
@@ -230,13 +239,419 @@ export async function diffMirror(input: DiffInput): Promise<SyncPlan> {
     // --- P10: a local file we have never tracked ---------------------
     if (localEntry && localEntry.state === 'present') {
       const result = await groupE(input, path, localEntry)
-      if (result?.step) steps.push(result.step)
-      if (result?.report) reports.push(result.report)
+      if (result?.step) {
+        steps.push(result.step)
+        if (result.step.report) reports.push(result.step.report)
+      }
       continue
     }
   }
 
   return { steps, reports }
+}
+
+/**
+ * Group B — the path has a live manifest entry.
+ *
+ * This group contains the app's only trash action (B0). Everything else here
+ * moves content around or records that nothing needs doing.
+ */
+async function groupB(
+  input: DiffInput,
+  path: string,
+  localEntry: LocalEntry | undefined,
+  manifestEntry: MirrorManifest['files'][string],
+  driveFile: DriveFile | undefined,
+): Promise<GroupResult | null> {
+  const { io, mergeOnly, driveWins } = input
+
+  const localPresent = localEntry?.state === 'present'
+  const localAbsent = localEntry?.state === 'absent'
+  const localUnknown = localEntry?.state === 'unknown'
+
+  // --- B0: the user deleted the local file -------------------------
+  if (driveFile && driveFile.id === manifestEntry.driveFileId && localAbsent) {
+    // The Drive copy is the app's to remove. But a rebase must not perform
+    // destructive actions at all, and the manifest write is suppressed with
+    // it: writing a `trashed` record for a file that is alive on Drive would
+    // make the next run report it as a user restore.
+    if (mergeOnly) {
+      return null
+    }
+    const record: RetiredRecord = {
+      path,
+      state: 'trashed',
+      at: new Date().toISOString(),
+      md5: driveFile.md5 ?? null,
+      driveMimeType: driveFile.mimeType,
+      localPath: manifestEntry.localPath,
+      prevLocalMd5: manifestEntry.localMd5,
+    }
+    return {
+      step: {
+        action: { kind: 'trash', relPath: path, driveFileId: driveFile.id },
+        ops: [
+          { op: 'set-retired', id: driveFile.id, record },
+          { op: 'del-file', path },
+        ],
+      },
+    }
+  }
+
+  // --- B1: the file is on both sides, compare the content -----------
+  if (driveFile && driveFile.id === manifestEntry.driveFileId && localPresent) {
+    const localMd5 = await io.md5Of(path)
+    const driveMd5 = driveFile.md5 ?? null
+    const baseMd5 = manifestEntry.driveMd5
+
+    const localChanged = compareContent(localMd5, baseMd5, localEntry)
+    const driveChanged = compareContent(driveMd5, baseMd5)
+
+    if (!localChanged && !driveChanged) {
+      // Nothing changed. Keep the entry as it is.
+      return null
+    }
+
+    if (localChanged && driveChanged) {
+      // Both sides moved. The conflict principle applies.
+      if (driveWins) {
+        return {
+          step: {
+            action: {
+              kind: 'download',
+              relPath: path,
+              localPath: manifestEntry.localPath,
+              driveFileId: driveFile.id,
+              size: driveFile.size ?? 0,
+            },
+            ops: [
+              {
+                op: 'set-file',
+                path,
+                entry: liveEntryFor(
+                  path,
+                  driveFile,
+                  manifestEntry.localPath,
+                  driveMd5,
+                  driveFile.size ?? 0,
+                  localEntry?.mtimeMs ?? 0,
+                ),
+              },
+            ],
+          },
+        }
+      }
+      return {
+        step: {
+          action: {
+            kind: 'replace-content',
+            relPath: path,
+            localPath: manifestEntry.localPath,
+            driveFileId: driveFile.id,
+            md5: localMd5 ?? '',
+            size: localEntry?.size ?? 0,
+          },
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: liveEntryFor(
+                path,
+                driveFile,
+                manifestEntry.localPath,
+                localMd5,
+                localEntry?.size ?? 0,
+                localEntry?.mtimeMs ?? 0,
+              ),
+            },
+          ],
+        },
+      }
+    }
+
+    if (localChanged) {
+      // Only the local side moved: push it up, keeping the Drive file id.
+      return {
+        step: {
+          action: {
+            kind: 'replace-content',
+            relPath: path,
+            localPath: manifestEntry.localPath,
+            driveFileId: driveFile.id,
+            md5: localMd5 ?? '',
+            size: localEntry?.size ?? 0,
+          },
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: liveEntryFor(
+                path,
+                driveFile,
+                manifestEntry.localPath,
+                localMd5,
+                localEntry?.size ?? 0,
+                localEntry?.mtimeMs ?? 0,
+              ),
+            },
+          ],
+        },
+      }
+    }
+
+    // Only the Drive side moved: pull it down.
+    return {
+      step: {
+        action: {
+          kind: 'download',
+          relPath: path,
+          localPath: manifestEntry.localPath,
+          driveFileId: driveFile.id,
+          size: driveFile.size ?? 0,
+        },
+        ops: [
+          {
+            op: 'set-file',
+            path,
+            entry: liveEntryFor(
+              path,
+              driveFile,
+              manifestEntry.localPath,
+              driveMd5,
+              driveFile.size ?? 0,
+              localEntry?.mtimeMs ?? 0,
+            ),
+          },
+        ],
+      },
+    }
+  }
+
+  // --- B2: a different Drive file now occupies the path ------------
+  if (driveFile && driveFile.id !== manifestEntry.driveFileId) {
+    const probe = await io.probe(manifestEntry.driveFileId)
+    const state = retiredStateFor(probe)
+    const record: RetiredRecord = {
+      path,
+      state,
+      at: new Date().toISOString(),
+      md5: manifestEntry.driveMd5,
+      driveMimeType: manifestEntry.driveMimeType,
+      localPath: manifestEntry.localPath,
+      prevLocalMd5: manifestEntry.localMd5,
+    }
+
+    if (state === 'gone' && localPresent) {
+      // The tracked file is gone for good and the local file is still here:
+      // upload it as a new Drive file.
+      return {
+        step: {
+          action: {
+            kind: 'upload',
+            relPath: path,
+            localPath: manifestEntry.localPath,
+            md5: (await io.md5Of(path)) ?? '',
+            size: localEntry?.size ?? 0,
+          },
+          ops: [
+            { op: 'set-retired', id: manifestEntry.driveFileId, record },
+            {
+              op: 'set-file',
+              path,
+              entry: {
+                displayPath: path,
+                driveFileId: '',
+                driveMd5: null,
+                driveModifiedTime: '',
+                driveMimeType: 'application/octet-stream',
+                exportMime: null,
+                localPath: manifestEntry.localPath,
+                localMd5: (await io.md5Of(path)) ?? null,
+                localSize: localEntry?.size ?? 0,
+                localMtimeMs: localEntry?.mtimeMs ?? 0,
+              },
+            },
+          ],
+        },
+      }
+    }
+
+    // The tracked file moved or was trashed elsewhere. The file now at this
+    // path is a different one; treat it as new-on-Drive.
+    return {
+      step: {
+        action: null,
+        ops: [{ op: 'set-retired', id: manifestEntry.driveFileId, record }],
+      },
+    }
+  }
+
+  // --- B3: the Drive file is gone, the local file is still here -----
+  if (!driveFile && localPresent) {
+    const probe = await io.probe(manifestEntry.driveFileId)
+
+    if (probe.status === 'trashed') {
+      // Somebody else trashed it. The app must not undo that, and must not
+      // re-upload over it either.
+      const record: RetiredRecord = {
+        path,
+        state: 'trashed-externally',
+        at: new Date().toISOString(),
+        md5: manifestEntry.driveMd5,
+        driveMimeType: manifestEntry.driveMimeType,
+        localPath: manifestEntry.localPath,
+        prevLocalMd5: manifestEntry.localMd5,
+      }
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'unbacked-up',
+            relPath: path,
+            message:
+              'this file was moved to the Drive trash by someone else; it was left alone and is not backed up',
+          },
+          ops: [
+            { op: 'set-retired', id: manifestEntry.driveFileId, record },
+            { op: 'del-file', path },
+          ],
+        },
+      }
+    }
+
+    if (probe.status === 'alive' && probe.currentPath === path) {
+      // The file is alive at this path; the listing simply missed it.
+      return {
+        step: {
+          action: null,
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: liveEntryFor(
+                path,
+                {
+                  id: manifestEntry.driveFileId,
+                  name: path,
+                  mimeType: manifestEntry.driveMimeType,
+                  size: manifestEntry.localSize,
+                  md5: manifestEntry.driveMd5,
+                  driveModifiedTime: manifestEntry.driveModifiedTime,
+                  ambiguous: false,
+                  unrepresentable: false,
+                },
+                manifestEntry.localPath,
+                manifestEntry.localMd5,
+                manifestEntry.localSize,
+                manifestEntry.localMtimeMs,
+              ),
+            },
+          ],
+        },
+      }
+    }
+
+    // The tracked Drive file is gone for good. Upload the local file again.
+    const localMd5 = await io.md5Of(path)
+    const record: RetiredRecord = {
+      path,
+      state: 'gone',
+      at: new Date().toISOString(),
+      md5: manifestEntry.driveMd5,
+      driveMimeType: manifestEntry.driveMimeType,
+      localPath: manifestEntry.localPath,
+      prevLocalMd5: manifestEntry.localMd5,
+    }
+    return {
+      step: {
+        action: {
+          kind: 'upload',
+          relPath: path,
+          localPath: manifestEntry.localPath,
+          md5: localMd5 ?? '',
+          size: localEntry?.size ?? 0,
+        },
+        ops: [
+          { op: 'set-retired', id: manifestEntry.driveFileId, record },
+          {
+            op: 'set-file',
+            path,
+            entry: {
+              displayPath: path,
+              driveFileId: '',
+              driveMd5: null,
+              driveModifiedTime: '',
+              driveMimeType: 'application/octet-stream',
+              exportMime: null,
+              localPath: manifestEntry.localPath,
+              localMd5: localMd5,
+              localSize: localEntry?.size ?? 0,
+              localMtimeMs: localEntry?.mtimeMs ?? 0,
+            },
+          },
+        ],
+      },
+    }
+  }
+
+  // --- B4: the file is gone from both sides ------------------------
+  if (!driveFile && localAbsent) {
+    const record: RetiredRecord = {
+      path,
+      state: 'gone',
+      at: new Date().toISOString(),
+      md5: manifestEntry.driveMd5,
+      driveMimeType: manifestEntry.driveMimeType,
+      localPath: manifestEntry.localPath,
+      prevLocalMd5: manifestEntry.localMd5,
+    }
+    return {
+      step: {
+        action: null,
+        ops: [
+          { op: 'set-retired', id: manifestEntry.driveFileId, record },
+          { op: 'del-file', path },
+        ],
+      },
+    }
+  }
+
+  // The local path is unreadable. Nothing may be decided from it.
+  if (localUnknown) return null
+
+  return null
+}
+
+/**
+ * The retired state implied by a probe of a tracked Drive file.
+ */
+function retiredStateFor(probe: ProbeResult): RetiredState {
+  if (probe.status === 'missing') return 'gone'
+  if (probe.status === 'trashed') return 'trashed-externally'
+  return 'moved'
+}
+
+/**
+ * Compare a current hash against the manifest's record of it.
+ *
+ * A missing hash on either side means the content cannot be compared, which
+ * counts as changed: the app then re-synchronises rather than assume the
+ * files match.
+ */
+function compareContent(
+  current: string | null,
+  baseline: string | null,
+  localEntry?: LocalEntry,
+): boolean {
+  if (current === null || baseline === null) {
+    // Without a checksum, fall back to size and mtime when the local side
+    // offers them. If those agree, treat the content as unchanged.
+    if (localEntry && localEntry.size !== undefined) {
+      return false
+    }
+    return true
+  }
+  return current !== baseline
 }
 
 /** A group result: an optional step and an optional report. */

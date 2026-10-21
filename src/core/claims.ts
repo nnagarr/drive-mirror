@@ -155,6 +155,11 @@ export function buildClaimIndex(
   }
 
   for (const [key, entry] of Object.entries(manifest.files)) {
+    // An entry whose local path is its own key is an ordinary mirror of that
+    // path; it does not "claim" the path from itself, or the engine would
+    // skip every file it tracks. Only an entry whose local representation
+    // lives elsewhere — a Google-native export — claims a foreign path.
+    if (canon(entry.localPath) === canon(key)) continue
     claim(entry.localPath, key)
   }
 

@@ -193,7 +193,31 @@ describe('buildClaimIndex', () => {
       },
     })
     const { claimedBy } = buildClaimIndex(mirror, new Map())
-    expect(claimedBy.get('renders/scene.psd')?.has('renders/scene.psd')).toBe(true)
+    // An ordinary mirrored file is not a claim on its own path — the engine
+    // would otherwise skip every file it tracks.
+    expect(claimedBy.has('renders/scene.psd')).toBe(false)
+  })
+
+  it('claims a live entry whose local representation lives elsewhere', () => {
+    // A Google-native export: the entry is keyed by the Drive path and its
+    // local file lives at the export path.
+    const mirror = mirrorWith({
+      budget: {
+        displayPath: 'budget',
+        driveFileId: 'D1',
+        driveMd5: 'm1',
+        driveModifiedTime: '2026-10-20T18:00:00.000Z',
+        driveMimeType: SHEET_MIME,
+        exportMime: 'text/csv',
+        localPath: 'budget.csv',
+        localMd5: 'm2',
+        localSize: 10,
+        localMtimeMs: 1,
+      },
+    })
+    const { claimedBy } = buildClaimIndex(mirror, new Map())
+    expect(claimedBy.get('budget.csv')?.has('budget')).toBe(true)
+    expect(claimedBy.has('budget')).toBe(false)
   })
 
   it('claims a planned export path under the native file key', () => {
