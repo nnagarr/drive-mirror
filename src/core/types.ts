@@ -194,3 +194,22 @@ export interface Report {
   relPath: string
   message: string
 }
+
+/** What a probe of a known Drive file id found. */
+export interface ProbeResult {
+  status: 'missing' | 'trashed' | 'alive'
+  /** The file's current path within the mirror, when it could be resolved. */
+  currentPath?: string
+}
+
+/** Everything the diff engine needs from the outside world. */
+export interface DiffIo {
+  /** Ask what happened to a Drive file id the app used to track. */
+  probe(driveFileId: string): Promise<ProbeResult>
+  /** The MD5 of a local file, or null when it cannot be read. */
+  md5Of(relPath: string): Promise<string | null>
+  /** The bytes of a local file, or null when it cannot be read. */
+  readLocalBytes(relPath: string): Promise<Buffer | null>
+  /** The exported bytes of a Google-native Drive file, or null. */
+  exportNative(driveFileId: string): Promise<Buffer | null>
+}
