@@ -275,6 +275,10 @@ if (!app.requestSingleInstanceLock()) {
     })
 
     mainWindow = createMainWindow()
+
+    // Fill in the file counts so the window shows the real trees before
+    // the first run.
+    await runner.prime()
   })
 
   app.on('window-all-closed', () => {

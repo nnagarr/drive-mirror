@@ -12,7 +12,9 @@ import { join } from 'node:path'
 
 /** Where the preload script lives, in development and in a build. */
 function preloadPath(): string {
-  return join(__dirname, '../preload/index.js')
+  // The preload script is CommonJS, because a sandboxed preload cannot be
+  // an ES module.
+  return join(__dirname, '../preload/index.cjs')
 }
 
 /** The page the window shows. */

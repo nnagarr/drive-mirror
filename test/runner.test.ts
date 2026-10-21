@@ -315,6 +315,21 @@ describe('the sync runner', () => {
     expect(created?.name).toBe('Medicine')
     expect(created?.parentId).toBe(MY_DRIVE_ID)
   })
+
+  it('fills in the file count without syncing anything', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    await writeFile(join(box.root, 'b.psd'), 'local bytes')
+
+    const app = runner(box)
+    await app.prime()
+
+    const state = app.state()
+    const card = state.mirrors.find((m) => m.name === 'Medicine')
+    expect(card?.fileCount).toBe(2)
+    // Nothing was written to Drive.
+    expect(box.client.calls.some((c) => c.op === 'createFile')).toBe(false)
+  })
 })
 
 /** The drive letter of a path, e.g. `C:`. */

@@ -74,6 +74,8 @@ export interface RunnerDeps {
 export interface Runner {
   syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }): Promise<RunSummary>
   state(): AppState
+  /** Fill in the file counts without syncing anything. */
+  prime(): Promise<void>
 }
 
 /** The counts a mirror reports. */
@@ -333,6 +335,24 @@ export function createRunner(deps: RunnerDeps): Runner {
   }
 
   const runner: Runner = {
+    async prime(): Promise<void> {
+      const manifest = await deps.store.read()
+      for (const spec of mirrors) {
+        const mirrorCard = card(spec.name)
+        mirrorCard.localRoot = spec.root
+        mirrorCard.drivePath = `My Drive/${spec.name}`
+        const mirrorManifest = manifest.mirrors[spec.name]
+        mirrorCard.lastSyncedAt = mirrorManifest?.lastSyncAt ?? null
+        try {
+          const local = await scanLocal({ root: spec.root, knownPaths: [] })
+          mirrorCard.fileCount = local.recursiveCounts[''] ?? 0
+        } catch {
+          // The folder is not there. A run will say so.
+        }
+      }
+      emitState()
+    },
+
     async syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }) {
       const startedAt = new Date().toISOString()
       running.value = true

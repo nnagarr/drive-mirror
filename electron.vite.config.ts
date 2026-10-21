@@ -15,6 +15,14 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: 'src/preload/index.ts',
+        output: {
+          // A sandboxed preload script cannot be an ES module: Electron
+          // runs sandboxed preloads as CommonJS, and an `.mjs` preload
+          // only works with the sandbox turned off. The sandbox stays on,
+          // so the preload is built as CommonJS with a `.cjs` name.
+          format: 'cjs',
+          entryFileNames: '[name].cjs',
+        },
       },
     },
   },
