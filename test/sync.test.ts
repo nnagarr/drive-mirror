@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, writeFile, readdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -155,10 +156,12 @@ describe('executePlan', () => {
     const box = await sandbox()
     box.client.add('D1', 'a.psd', { content: Buffer.from('the drive copy') })
 
-    let archivedWhenTrashed: string[] = []
+    // The archive has to be written BEFORE the trash is issued: the
+    // archive is the only second copy of the file.
+    let archivedWhenTrashed = false
     box.client.onCall = (call) => {
       if (call.op === 'trash') {
-        archivedWhenTrashed = ['pending']
+        archivedWhenTrashed = existsSync(join(box.archiveDir, 'Medicine', 'a.psd'))
       }
     }
 
@@ -180,6 +183,7 @@ describe('executePlan', () => {
     // The archive call must come before the trash call.
     const ops = box.client.calls.map((c) => c.op)
     expect(ops.indexOf('download')).toBeLessThan(ops.indexOf('trash'))
+    expect(archivedWhenTrashed).toBe(true)
 
     const files = await archivedFiles(box.archiveDir)
     expect(files).toHaveLength(1)

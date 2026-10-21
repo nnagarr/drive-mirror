@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { planExportPaths, buildClaimIndex } from '../src/core/claims'
 import { retired } from './helpers/fixtures'
 import { canon } from '../src/core/paths'
-import { emptyManifest, emptyMirror } from '../src/core/manifest'
+import { emptyMirror } from '../src/core/manifest'
 import type {
   DriveFile,
   DriveNode,

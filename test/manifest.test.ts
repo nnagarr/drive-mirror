@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, readdir, readFile, writeFile, stat } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,7 +10,7 @@ import {
   buildIndexes,
   applyManifestOp,
 } from '../src/core/manifest'
-import type { Manifest, MirrorManifest, RetiredRecord } from '../src/core/types'
+import type { Manifest, RetiredRecord } from '../src/core/types'
 
 let dir: string
 

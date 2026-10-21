@@ -1,5 +1,4 @@
 import type { JSX } from 'react'
-import type { RunSummary } from '../../main/ipc'
 
 export interface GuardBannerProps {
   guard: { mirror: string; reason: string; message: string; canOverride: boolean }

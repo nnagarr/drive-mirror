@@ -109,11 +109,6 @@ export interface DiffInput {
 // Imported lazily to keep the type surface in one place.
 import type { DriveTree, LocalTree } from './types'
 
-/** A group that has not been implemented yet. */
-function notImplemented(step: string): never {
-  throw new Error(`diff: step ${step} is not implemented yet`)
-}
-
 /**
  * The dispatch step that handles a path, for the exhaustiveness test.
  *
@@ -1514,7 +1509,6 @@ async function groupN(
         : probe.status === 'trashed'
           ? 'trashed-externally'
           : 'moved'
-    const bytes = await io.exportNative(driveFile.id)
     const result = exportTo(plannedPath, false, driveFile.id)
     const retired: ManifestOp = {
       op: 'set-retired',

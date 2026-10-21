@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRunner } from '../src/main/runner'
@@ -73,15 +73,6 @@ function runner(box: Harness) {
     hasCredentials: () => true,
     accountEmail: () => 'user@example.com',
   })
-}
-
-/** A manifest with a volume recorded for the mirror's drive. */
-async function manifestWithVolume(dir: string, dev: number): Promise<Manifest> {
-  const store = createManifestStore(join(dir, 'state'))
-  const manifest = await store.read()
-  manifest.volumes['C:'] = { dev, checkedAt: '2026-10-20T00:00:00.000Z' }
-  await store.write(manifest)
-  return manifest
 }
 
 describe('the sync runner', () => {

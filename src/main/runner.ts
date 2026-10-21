@@ -17,14 +17,13 @@
  */
 
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { createReadStream, statSync } from 'node:fs'
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createReadStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
-import { buildDriveTree, buildListQuery, FOLDER_MIME } from '../core/driveTree'
-import { checkCountDrop, rebaseMirror } from '../core/guards'
+import { buildDriveTree, FOLDER_MIME } from '../core/driveTree'
+import { checkCountDrop, checkVolumeFingerprint, rebaseMirror } from '../core/guards'
 import { exportInfoFor } from '../core/googleMime'
 import { scanLocal } from '../core/localScan'
 import { buildClaimIndex, planExportPaths } from '../core/claims'
@@ -76,6 +75,14 @@ export interface Runner {
   state(): AppState
   /** Fill in the file counts without syncing anything. */
   prime(): Promise<void>
+  /**
+   * Approve a new volume for a mirror.
+   *
+   * The mirror's live entries describe the volume it was mirrored from.
+   * They become retired records, and the next run merges the two sides
+   * with the Drive copy winning - the only surviving version of the work.
+   */
+  rebase(mirrorName: string): Promise<void>
 }
 
 /** The counts a mirror reports. */
@@ -179,14 +186,34 @@ export function createRunner(deps: RunnerDeps): Runner {
     }
 
     // --- Guard 2: the volume must be the same one -------------------
+    // Two things have to hold: the drive letter must still be the same
+    // volume it was, and the mirror's own root must be on that volume.
+    // A reassigned drive letter or a swapped disk would otherwise look
+    // exactly like "every file was deleted".
     const driveLetter = driveLetterOf(spec.root)
     const recorded = manifest.volumes[driveLetter]
-    const currentDev = rootStat.dev
-    if (recorded && recorded.dev !== currentDev) {
+    const driveDev = volumeDevOf(driveLetter)
+
+    // 1. The drive letter must still be the volume it was. A reassigned
+    //    letter or a swapped disk changes the serial.
+    if (checkVolumeFingerprint(recorded, { dev: driveDev ?? rootStat.dev })) {
       skipMirror(
         spec.name,
         'volume-changed',
         `the drive ${driveLetter} is now a different volume, so the files on it are not the ones that were mirrored`,
+        true,
+      )
+      return { counts, changed, reports, skipped: true }
+    }
+
+    // 2. The mirror's own root must be on that drive. A folder that has
+    //    become a junction to another disk would otherwise look like
+    //    every file was deleted.
+    if (driveDev !== null && driveDev !== rootStat.dev) {
+      skipMirror(
+        spec.name,
+        'volume-changed',
+        `the folder ${spec.root} is on a different volume from the drive ${driveLetter}`,
         true,
       )
       return { counts, changed, reports, skipped: true }
@@ -314,7 +341,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     mirrorManifest.lastSyncAt = new Date().toISOString()
 
     manifest.volumes[driveLetter] = {
-      dev: currentDev,
+      dev: rootStat.dev,
       checkedAt: new Date().toISOString(),
     }
     manifest.mirrors[spec.name] = mirrorManifest
@@ -361,6 +388,32 @@ export function createRunner(deps: RunnerDeps): Runner {
         }
       }
       emitState()
+    },
+
+    async rebase(mirrorName: string): Promise<void> {
+      const manifest = await deps.store.read()
+      const spec = mirrors.find((m) => m.name === mirrorName)
+      if (!spec) return
+
+      const mirrorManifest = manifest.mirrors[mirrorName] ?? emptyManifestFor(spec.root)
+
+      // The live entries describe the OLD volume. They become retired
+      // records, so the engine can later tell "the same file came back"
+      // from "a different file took its place".
+      manifest.mirrors[mirrorName] = rebaseMirror(mirrorManifest, new Date().toISOString())
+
+      // The new volume's serial is what is recorded from now on.
+      const driveLetter = driveLetterOf(spec.root)
+      const dev = volumeDevOf(driveLetter)
+      if (dev !== null) {
+        manifest.volumes[driveLetter] = {
+          dev,
+          checkedAt: new Date().toISOString(),
+        }
+      }
+
+      await deps.store.checkpoint(manifest)
+      await writeBackup(deps.settings.backupPath, manifest)
     },
 
     async syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }) {
@@ -465,6 +518,22 @@ function emptyManifestFor(root: string): MirrorManifest {
 function driveLetterOf(root: string): string {
   const match = /^([a-zA-Z]):/.exec(root)
   return match ? `${match[1]!.toUpperCase()}:` : 'E:'
+}
+
+/**
+ * The volume serial number of a drive letter, or null when it cannot be
+ * read.
+ *
+ * On Windows, `fs.statSync(path).dev` IS the volume serial number, so a
+ * change in it means a different physical volume is now mounted at the
+ * same letter.
+ */
+function volumeDevOf(driveLetter: string): number | null {
+  try {
+    return statSync(`${driveLetter}\\`).dev
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -638,14 +707,3 @@ async function md5OfFile(abs: string): Promise<string | null> {
   }
 }
 
-/** The size of a local file, for the mirror card. */
-function fileSize(abs: string): number {
-  try {
-    return statSync(abs).size
-  } catch {
-    return 0
-  }
-}
-
-/** Re-exported so the runner's helpers are usable elsewhere. */
-export { buildListQuery, rebaseMirror, readFileSync, fileSize }

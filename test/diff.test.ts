@@ -687,7 +687,6 @@ describe('diffMirror --- group R (retired id)', () => {
 
 describe('diffMirror --- group N (Google-native)', () => {
   const SHEET = 'application/vnd.google-apps.spreadsheet'
-  const DOC = 'application/vnd.google-apps.document'
 
   it('exports a first-sight native file to its planned path (N1)', async () => {
     const p = await plan({

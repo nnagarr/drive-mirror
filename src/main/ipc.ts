@@ -109,7 +109,7 @@ export function registerIpc(deps: IpcDeps): void {
   })
 
   ipcMain.handle('drive-mirror:rebase', async (_event, mirrorName: string) => {
-    void mirrorName
+    await deps.runner.rebase(mirrorName)
   })
 
   ipcMain.handle('drive-mirror:get-settings', () => deps.getSettings())

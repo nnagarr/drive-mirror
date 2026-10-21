@@ -82,20 +82,6 @@ export function createCredentialStore(
     clientSecret?: string
   }
 
-  async function read(): Promise<Stored | null> {
-    let text: string
-    try {
-      text = await readFile(file, 'utf8')
-    } catch {
-      return null
-    }
-    try {
-      return JSON.parse(text) as Stored
-    } catch {
-      return null
-    }
-  }
-
   function decrypt(encoded: string | undefined): string | null {
     if (!encoded) return null
     try {
