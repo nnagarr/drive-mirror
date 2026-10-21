@@ -3,6 +3,7 @@ import { diffMirror } from '../src/core/diff'
 import { localTree, driveTree, mirrorManifest, diffIo } from './helpers/fixtures'
 import type { DiffInput, SyncPlan } from '../src/core/diff'
 import type { DiffIo, SyncAction } from '../src/core/diff'
+import type { RetiredRecord, RetiredState } from '../src/core/types'
 
 /** Overrides accepted by the `plan` helper. `io` is merged, not substituted. */
 type PlanOverrides = Omit<Partial<DiffInput>, 'io'> & {
@@ -34,7 +35,7 @@ function kinds(p: SyncPlan): string[] {
   return actions(p).map((a) => a.kind)
 }
 
-describe('diffMirror â€” group C (never synced)', () => {
+describe('diffMirror --- group C (never synced)', () => {
   it('downloads a Drive-only file (C1)', async () => {
     const p = await plan({
       drive: driveTree([{ id: 'D1', name: 'scene.psd', parentPath: 'renders' }]),
@@ -92,7 +93,7 @@ describe('diffMirror â€” group C (never synced)', () => {
   })
 })
 
-describe('diffMirror â€” group E (local-only)', () => {
+describe('diffMirror --- group E (local-only)', () => {
   it('uploads a local-only file (E1)', async () => {
     const p = await plan({
       local: localTree({ 'new.psd': { md5: 'm1', size: 10 } }),
@@ -141,7 +142,7 @@ describe('diffMirror â€” group E (local-only)', () => {
   })
 })
 
-describe('diffMirror â€” group B (live manifest entry)', () => {
+describe('diffMirror --- group B (live manifest entry)', () => {
   it('trashes the Drive copy when the local file is deleted (B0)', async () => {
     const p = await plan({
       local: localTree({ 'a.psd': 'absent' }),
@@ -320,7 +321,7 @@ describe('diffMirror â€” group B (live manifest entry)', () => {
   })
 })
 
-describe('diffMirror â€” group D (retired path)', () => {
+describe('diffMirror --- group D (retired path)', () => {
   const retiredTrashed = {
     D1: {
       path: 'a.psd',
@@ -489,7 +490,238 @@ describe('diffMirror â€” group D (retired path)', () => {
   })
 })
 
-describe('diffMirror â€” dispatch pre-gates', () => {
+describe('diffMirror --- group R (retired id)', () => {
+  const retired = (state: RetiredState, extra: Partial<RetiredRecord> = {}) => ({
+    D1: {
+      path: 'a.psd',
+      state,
+      at: '2026-10-20T00:00:00.000Z',
+      md5: 'm1',
+      driveMimeType: 'application/octet-stream',
+      localPath: null,
+      ...extra,
+    },
+  })
+
+  it('does not download a file restored from Drive Trash (R1)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': 'absent' }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({}, retired('trashed')),
+    })
+
+    expect(kinds(p)).not.toContain('download')
+    expect(p.reports.map((r) => r.code)).toContain('restored-from-trash')
+    const rec = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    if (rec && rec.op === 'set-retired') {
+      expect(rec.id).toBe('D1')
+      expect(rec.record.state).toBe('restored')
+    }
+  })
+
+  it('leaves a restored file alone forever (R2)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': 'absent' }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({}, retired('restored')),
+    })
+
+    expect(kinds(p)).toEqual([])
+    expect(p.reports).toEqual([])
+  })
+
+  it('reports a conflict when a restored file collides with a local file (R3)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm2' } }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({}, retired('restored')),
+    })
+
+    expect(kinds(p)).toEqual([])
+    expect(p.reports.length).toBeGreaterThan(0)
+  })
+
+  it('leaves an impossible gone/purged record alone (R4)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': 'absent' }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({}, retired('gone')),
+    })
+
+    expect(kinds(p)).toEqual([])
+    expect(p.reports.map((r) => r.code)).toContain('anomaly')
+  })
+
+  it('downloads a moved file that is now at this path (R5)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': 'absent' }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({}, retired('moved')),
+    })
+
+    expect(kinds(p)).toEqual(['download'])
+    const rec = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    if (rec && rec.op === 'set-retired') {
+      expect(rec.id).toBe('D1')
+      expect(rec.record.state).toBe('resynced')
+    }
+  })
+
+  it('replaces content in place for a moved file with a local collision (R6)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm2' } }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({}, retired('moved')),
+    })
+
+    expect(kinds(p)).toEqual(['replace-content'])
+    const action = actions(p)[0]!
+    if (action.kind === 'replace-content') {
+      expect(action.driveFileId).toBe('D1')
+    }
+  })
+
+  it('does not download a rebased path that was empty locally (R8)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': 'absent' }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({}, retired('rebased', { prevLocalMd5: 'm1' })),
+    })
+
+    expect(kinds(p)).not.toContain('download')
+    expect(p.reports.map((r) => r.code)).toContain('rebased-not-downloaded')
+    // The record keeps its state: it is the proof that the file was deleted
+    // before the volume changed.
+    const rec = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    if (rec && rec.op === 'set-retired') {
+      expect(rec.record.state).toBe('rebased')
+    }
+  })
+
+  it('adopts a rebased file that came back unchanged (R9)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm1' } }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest({}, retired('rebased', { prevLocalMd5: 'm1' })),
+    })
+
+    expect(kinds(p)).toEqual([])
+    const ops = p.steps.flatMap((s) => s.ops)
+    expect(ops.some((o) => o.op === 'set-file')).toBe(true)
+    const rec = ops.find((o) => o.op === 'set-retired')
+    if (rec && rec.op === 'set-retired') {
+      expect(rec.record.state).toBe('resynced')
+    }
+  })
+
+  it('reconciles a rebased file that changed on Drive (R10)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm1' } }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm2' }]),
+      manifest: mirrorManifest({}, retired('rebased', { prevLocalMd5: 'm1' })),
+      driveWins: true,
+    })
+
+    expect(kinds(p)).toEqual(['download'])
+    const rec = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    if (rec && rec.op === 'set-retired') {
+      expect(rec.record.state).toBe('resynced')
+    }
+  })
+
+  it('never trashes or uploads over a Google-native file in group R', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm2' } }),
+      drive: driveTree([
+        {
+          id: 'D1',
+          name: 'a.psd',
+          mimeType: 'application/vnd.google-apps.document',
+          md5: 'm1',
+        },
+      ]),
+      manifest: mirrorManifest(
+        {},
+        {
+          D1: {
+            path: 'a.psd',
+            state: 'trashed',
+            at: '2026-10-20T00:00:00.000Z',
+            md5: 'm1',
+            driveMimeType: 'application/vnd.google-apps.document',
+            localPath: null,
+          },
+        },
+      ),
+    })
+
+    expect(kinds(p)).not.toContain('trash')
+    expect(kinds(p)).not.toContain('replace-content')
+  })
+
+  it('never uploads over a Google-native file that moved (R5/R6 guard)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm2' } }),
+      drive: driveTree([
+        {
+          id: 'D1',
+          name: 'a.psd',
+          mimeType: 'application/vnd.google-apps.document',
+          md5: 'm1',
+        },
+      ]),
+      manifest: mirrorManifest(
+        {},
+        {
+          D1: {
+            path: 'a.psd',
+            state: 'moved',
+            at: '2026-10-20T00:00:00.000Z',
+            md5: 'm1',
+            driveMimeType: 'application/vnd.google-apps.document',
+            localPath: null,
+          },
+        },
+      ),
+    })
+
+    expect(kinds(p)).not.toContain('replace-content')
+    expect(kinds(p)).not.toContain('trash')
+  })
+
+  it('never uploads over a Google-native file that changed after a rebase (R10 guard)', async () => {
+    const p = await plan({
+      local: localTree({ 'a.psd': { md5: 'm2' } }),
+      drive: driveTree([
+        {
+          id: 'D1',
+          name: 'a.psd',
+          mimeType: 'application/vnd.google-apps.document',
+          md5: 'm3',
+        },
+      ]),
+      manifest: mirrorManifest(
+        {},
+        {
+          D1: {
+            path: 'a.psd',
+            state: 'rebased',
+            at: '2026-10-20T00:00:00.000Z',
+            md5: 'm1',
+            driveMimeType: 'application/vnd.google-apps.document',
+            localPath: null,
+            prevLocalMd5: 'm1',
+          },
+        },
+      ),
+    })
+
+    expect(kinds(p)).not.toContain('replace-content')
+    expect(kinds(p)).not.toContain('trash')
+  })
+})
+
+describe('diffMirror --- dispatch pre-gates', () => {
   it('reports and skips an ambiguous Drive path', async () => {
     const p = await plan({
       drive: driveTree([

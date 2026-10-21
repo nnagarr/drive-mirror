@@ -194,7 +194,16 @@ export async function diffMirror(input: DiffInput): Promise<SyncPlan> {
 
     // --- P4: the Drive file is a known, retired id -------------------
     if (usableDrive && rec && rec.state !== 'resynced') {
-      notImplemented('P4 / group R')
+      const result = await groupR(input, path, localEntry, usableDrive, rec)
+      if (result?.step) {
+        steps.push(result.step)
+        if (result.step.report) reports.push(result.step.report)
+      }
+      if (result?.followUp) {
+        steps.push(result.followUp)
+        if (result.followUp.report) reports.push(result.followUp.report)
+      }
+      continue
     }
 
     // --- P5 / P6: Google-native files -------------------------------
@@ -864,6 +873,318 @@ async function groupD(
 
   // Any other state: the file is not on Drive and the local one is new.
   return uploadNew('gone', recordId)
+}
+
+/**
+ * Group R — the Drive file is a known, retired id.
+ *
+ * This is the group that decides whether a file the user deleted comes back.
+ * The answer is usually no: the user deleting a file locally and the app
+ * trashing the Drive copy must not become a loop that re-downloads it.
+ */
+async function groupR(
+  input: DiffInput,
+  path: string,
+  localEntry: LocalEntry | undefined,
+  driveFile: DriveFile,
+  record: RetiredRecord,
+): Promise<GroupResult | null> {
+  const { io, driveWins } = input
+  const localPresent = localEntry?.state === 'present'
+  const localAbsent = localEntry?.state === 'absent'
+  const localMd5 = localPresent ? await io.md5Of(path) : null
+  const localSize = localEntry?.size ?? 0
+
+  // A Google-native file is never uploaded over and never trashed, whatever
+  // the retired record says. The only thing that may happen to it is a
+  // download, which exports it rather than copying bytes.
+  const isNative = isGoogleNativeMime(driveFile.mimeType)
+
+  /** Record a transition and, when the file is live again, a live entry. */
+  const release = (state: RetiredState): ManifestOp => ({
+    op: 'set-retired',
+    id: driveFile.id,
+    record: { ...record, state, at: new Date().toISOString() },
+  })
+
+  // --- R1: the user deleted it locally, and it is back --------------
+  if (record.state === 'trashed' || record.state === 'trashed-externally') {
+    if (localAbsent) {
+      // The file is on Drive and not on disk. The user restored it — or
+      // somebody else did. Either way the app does not re-download it: the
+      // user's deletion stands until they say otherwise.
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'restored-from-trash',
+            relPath: path,
+            message:
+              'this file was restored to the Drive trash; it is on Drive but was not downloaded back',
+          },
+          ops: [release('restored')],
+        },
+      }
+    }
+
+    // The local file is back too. Two copies with the same name is a
+    // conflict the user must resolve; the app changes neither.
+    return {
+      step: {
+        action: null,
+        report: {
+          code: 'native-path-conflict',
+          relPath: path,
+          message:
+            'this file was restored to the Drive trash and a local file has the same name; neither was changed',
+        },
+        ops: [],
+      },
+    }
+  }
+
+  // --- R2: already reported as restored; leave it alone forever -----
+  if (record.state === 'restored') {
+    if (localPresent) {
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'native-path-conflict',
+            relPath: path,
+            message:
+              'this file was restored to the Drive trash and a local file has the same name; neither was changed',
+          },
+          ops: [],
+        },
+      }
+    }
+    return null
+  }
+
+  // --- R4: gone or purged, yet the file exists ----------------------
+  if (record.state === 'gone' || record.state === 'purged') {
+    // Drive never reuses a file id, so a file recorded as permanently gone
+    // cannot reappear. If it does, something is wrong; do nothing and say so.
+    return {
+      step: {
+        action: null,
+        report: {
+          code: 'anomaly',
+          relPath: path,
+          message:
+            'a file recorded as deleted on Drive is present again; it was left untouched',
+        },
+        ops: [],
+      },
+    }
+  }
+
+  // --- R5 / R6: the file moved on Drive ----------------------------
+  if (record.state === 'moved') {
+    if (!localPresent) {
+      // The file is at this path now and is not on disk. Download it.
+      return {
+        step: {
+          action: {
+            kind: 'download',
+            relPath: path,
+            localPath: path,
+            driveFileId: driveFile.id,
+            size: driveFile.size ?? 0,
+          },
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: liveEntryFor(
+                path,
+                driveFile,
+                path,
+                driveFile.md5 ?? null,
+                driveFile.size ?? 0,
+                0,
+              ),
+            },
+            release('resynced'),
+          ],
+        },
+      }
+    }
+
+    if (isNative) {
+      // A Google-native file with a local file of the same name. The two
+      // cannot share the path; report and change nothing.
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'native-path-conflict',
+            relPath: path,
+            message:
+              'this Google file moved and a local file has the same name; neither was changed',
+          },
+          ops: [],
+        },
+      }
+    }
+
+    // A local file with the same name. The local side wins, keeping the
+    // Drive file id.
+    return {
+      step: {
+        action: {
+          kind: 'replace-content',
+          relPath: path,
+          localPath: path,
+          driveFileId: driveFile.id,
+          md5: localMd5 ?? '',
+          size: localSize,
+        },
+        ops: [
+          {
+            op: 'set-file',
+            path,
+            entry: liveEntryFor(
+              path,
+              driveFile,
+              path,
+              localMd5,
+              localSize,
+              localEntry?.mtimeMs ?? 0,
+            ),
+          },
+          release('resynced'),
+        ],
+      },
+    }
+  }
+
+  // --- R8 / R9 / R10: the volume changed under this file -----------
+  if (record.state === 'rebased') {
+    if (!localPresent) {
+      // The file was deleted locally before the volume changed, and that
+      // deletion was never synced. Do not download it: the record stays
+      // 'rebased', which is the proof that it was deleted.
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'rebased-not-downloaded',
+            relPath: path,
+            message:
+              'this file was empty locally before the volume changed; it was not downloaded',
+          },
+          ops: [],
+        },
+      }
+    }
+
+    const driveMd5 = driveFile.md5 ?? null
+    const sameLocal = localMd5 !== null && localMd5 === (record.prevLocalMd5 ?? null)
+    const sameDrive = driveMd5 !== null && driveMd5 === record.md5
+
+    if (sameLocal && sameDrive) {
+      // The same file came back, unchanged. Adopt it.
+      return {
+        step: {
+          action: null,
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: liveEntryFor(
+                path,
+                driveFile,
+                path,
+                localMd5,
+                localSize,
+                localEntry?.mtimeMs ?? 0,
+              ),
+            },
+            release('resynced'),
+          ],
+        },
+      }
+    }
+
+    // Something changed. The Drive copy wins during a rebase: it is the
+    // only surviving version of the user's work.
+    if (driveWins) {
+      return {
+        step: {
+          action: {
+            kind: 'download',
+            relPath: path,
+            localPath: path,
+            driveFileId: driveFile.id,
+            size: driveFile.size ?? 0,
+          },
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: liveEntryFor(
+                path,
+                driveFile,
+                path,
+                driveMd5,
+                driveFile.size ?? 0,
+                localEntry?.mtimeMs ?? 0,
+              ),
+            },
+            release('resynced'),
+          ],
+        },
+      }
+    }
+
+    if (isNative) {
+      // A Google-native file is never uploaded over.
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'native-path-conflict',
+            relPath: path,
+            message:
+              'this Google file and a local file have the same name; neither was changed',
+          },
+          ops: [],
+        },
+      }
+    }
+
+    return {
+      step: {
+        action: {
+          kind: 'replace-content',
+          relPath: path,
+          localPath: path,
+          driveFileId: driveFile.id,
+          md5: localMd5 ?? '',
+          size: localSize,
+        },
+        ops: [
+          {
+            op: 'set-file',
+            path,
+            entry: liveEntryFor(
+              path,
+              driveFile,
+              path,
+              localMd5,
+              localSize,
+              localEntry?.mtimeMs ?? 0,
+            ),
+          },
+          release('resynced'),
+        ],
+      },
+    }
+  }
+
+  return null
 }
 
 /** A group result: an optional step and an optional report. */
