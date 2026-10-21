@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -65,12 +65,53 @@ const ALL_STATES: RetiredRecord['state'][] = [
   'resynced',
 ]
 
+/** The four trees the app was built for, with the file counts it shipped with. */
+const SHIPPED_MIRRORS = [
+  { name: 'Medicine', files: 43 },
+  { name: 'graphicDesign', files: 43 },
+  { name: 'videoEditing', files: 113 },
+  { name: 'whoami', files: 55 },
+]
+
+/**
+ * A version 10 manifest, as the app wrote it before it knew about an
+ * account or a Drive destination.
+ */
+function version10Manifest(): Record<string, unknown> {
+  const mirrors: Record<string, unknown> = {}
+  for (const mirror of SHIPPED_MIRRORS) {
+    const files: Record<string, unknown> = {}
+    for (let i = 0; i < mirror.files; i += 1) {
+      const path = `renders/scene-${i}.psd`
+      files[path] = liveEntry(path)
+    }
+    mirrors[mirror.name] = {
+      root: `E:\\${mirror.name}`,
+      driveFolderName: mirror.name,
+      lastCounts: { '': mirror.files },
+      rebase: null,
+      dirs: {},
+      files,
+      retired: {},
+    }
+  }
+  return {
+    version: 10,
+    updatedAt: '2026-10-20T18:00:00.000Z',
+    volumes: {
+      'E:': { dev: 404660920, label: 'Local Disk', checkedAt: '2026-10-20T18:00:00.000Z' },
+    },
+    mirrors,
+  }
+}
+
 describe('emptyManifest', () => {
-  it('starts at version 10 with no volumes and no mirrors', () => {
+  it('starts at version 11 with no volumes, no mirrors and no account', () => {
     const m = emptyManifest()
-    expect(m.version).toBe(10)
+    expect(m.version).toBe(11)
     expect(m.volumes).toEqual({})
     expect(m.mirrors).toEqual({})
+    expect(m.accountEmail).toBeNull()
     expect(typeof m.updatedAt).toBe('string')
   })
 })
@@ -91,7 +132,7 @@ describe('manifest store', () => {
   it('reads an empty manifest when no file exists', async () => {
     const store = createManifestStore(dir)
     const m = await store.read()
-    expect(m.version).toBe(10)
+    expect(m.version).toBe(11)
     expect(m.mirrors).toEqual({})
   })
 
@@ -111,6 +152,7 @@ describe('manifest store', () => {
     const m = emptyManifest()
     m.volumes['E:'] = { dev: 404660920, label: 'Local Disk', checkedAt: '2026-10-21T09:59:00.000Z' }
     const mirror = emptyMirror('E:\\Medicine')
+    mirror.drivePath = 'Archive/Medicine'
     mirror.driveFolderId = '1AbCdEf'
     mirror.driveFolderName = 'Medicine'
     mirror.lastSyncAt = '2026-10-21T09:59:00.000Z'
@@ -128,6 +170,7 @@ describe('manifest store', () => {
 
     expect(read.volumes['E:']?.dev).toBe(404660920)
     const rm2 = read.mirrors['Medicine']!
+    expect(rm2.drivePath).toBe('Archive/Medicine')
     expect(rm2.driveFolderId).toBe('1AbCdEf')
     expect(rm2.lastCounts).toEqual({ '': 43, incision: 29 })
     expect(rm2.dirs).toEqual({ incision: { driveFolderId: '1GhIjK' } })
@@ -264,6 +307,92 @@ describe('manifest store', () => {
     applyManifestOp(mirror, { op: 'set-retired', id: 'D1', record: rec })
     applyManifestOp(mirror, { op: 'set-retired', id: 'D1', record: { ...rec } })
     expect(mirror.retired['D1']?.at).toBe('2026-10-20T00:00:00.000Z')
+  })
+
+  it('reads a version 10 manifest and keeps every mirror in it', async () => {
+    await writeFile(
+      join(dir, 'manifest.json'),
+      JSON.stringify({
+        version: 10,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        volumes: {},
+        mirrors: {
+          Medicine: {
+            root: 'E:\\Medicine',
+            lastCounts: { '': 43 },
+            rebase: null,
+            dirs: {},
+            files: {},
+            retired: {},
+          },
+        },
+      }),
+      'utf8',
+    )
+    const store = createManifestStore(dir)
+    const m = await store.read()
+    expect(m.mirrors.Medicine?.root).toBe('E:\\Medicine')
+    expect(m.accountEmail).toBeNull()
+  })
+
+  it('reads a version 10 manifest with the four trees the app was built for', async () => {
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify(version10Manifest()), 'utf8')
+    const store = createManifestStore(dir)
+    const m = await store.read()
+
+    expect(Object.keys(m.mirrors).sort()).toEqual([
+      'Medicine',
+      'graphicDesign',
+      'videoEditing',
+      'whoami',
+    ])
+    for (const mirror of SHIPPED_MIRRORS) {
+      const read = m.mirrors[mirror.name]
+      expect(read?.root).toBe(`E:\\${mirror.name}`)
+      expect(Object.keys(read?.files ?? {})).toHaveLength(mirror.files)
+      expect(Object.keys(read?.retired ?? {})).toHaveLength(0)
+    }
+    const files = Object.values(m.mirrors).reduce(
+      (total, mirror) => total + Object.keys(mirror.files).length,
+      0,
+    )
+    expect(files).toBe(254)
+    expect(m.volumes['E:']?.dev).toBe(404660920)
+    expect(m.accountEmail).toBeNull()
+    // The file is read as it is: no rejection, no conversion, no data moved.
+    expect(m.version).toBe(10)
+
+    // Writing it back keeps every mirror and gains the field the file did
+    // not have. Nothing is moved, nothing is dropped.
+    await store.write(m)
+    const written = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'))
+    expect(Object.keys(written.mirrors).sort()).toEqual([
+      'Medicine',
+      'graphicDesign',
+      'videoEditing',
+      'whoami',
+    ])
+    expect(written.accountEmail).toBeNull()
+  })
+
+  it('writes version 11', async () => {
+    const store = createManifestStore(dir)
+    const m = await store.read()
+    expect(m.version).toBe(11)
+    expect(m.accountEmail).toBeNull()
+
+    await store.write(m)
+    const written = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'))
+    expect(written.version).toBe(11)
+    expect(written.accountEmail).toBeNull()
+  })
+
+  it('keeps the account through a round trip', async () => {
+    const store = createManifestStore(dir)
+    const m = await store.read()
+    m.accountEmail = 'someone@example.com'
+    await store.write(m)
+    expect((await store.read()).accountEmail).toBe('someone@example.com')
   })
 })
 

@@ -124,6 +124,8 @@ export interface RetiredRecord {
 /** Everything the app knows about one mirror. */
 export interface MirrorManifest {
   root: string
+  /** The destination under My Drive, e.g. "Archive/Photos". */
+  drivePath?: string
   driveFolderId?: string
   driveFolderName?: string
   lastSyncAt?: string
@@ -145,6 +147,13 @@ export interface Manifest {
   /** Drive letter -> volume fingerprint. */
   volumes: Record<string, { dev: number; label?: string; checkedAt: string }>
   mirrors: Record<string, MirrorManifest>
+  /**
+   * The Google account that owns this Drive data.
+   *
+   * Null when no run has recorded the account yet: not known yet, not
+   * "no account".
+   */
+  accountEmail: string | null
 }
 
 /** A mutation of the manifest. */

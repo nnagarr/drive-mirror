@@ -25,7 +25,7 @@ import type {
 } from './types'
 
 /** The manifest schema version this build reads and writes. */
-export const MANIFEST_VERSION = 10
+export const MANIFEST_VERSION = 11
 
 const MANIFEST_FILE = 'manifest.json'
 const MANIFEST_TMP = 'manifest.json.tmp'
@@ -48,6 +48,7 @@ export function emptyManifest(): Manifest {
     updatedAt: new Date().toISOString(),
     volumes: {},
     mirrors: {},
+    accountEmail: null,
   }
 }
 
@@ -164,9 +165,14 @@ export function createManifestStore(dir: string): ManifestStore {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') return emptyManifest()
         throw err
       }
-      const parsed = JSON.parse(raw) as Manifest
+      const parsed = JSON.parse(raw) as Partial<Manifest>
       if (typeof parsed.version !== 'number') return emptyManifest()
-      return parsed
+      // The file is read as it is. An older manifest keeps every mirror,
+      // every file and every retired record it holds, and only gains the
+      // fields this build knows and the file does not mention - the account
+      // above all. The version in the file is left alone: there is no
+      // migration step and no data is moved.
+      return { ...emptyManifest(), ...parsed }
     },
 
     async write(m: Manifest): Promise<void> {
