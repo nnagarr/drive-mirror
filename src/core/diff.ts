@@ -45,9 +45,10 @@ import type {
   RetiredState,
 } from './types'
 
+export { type DiffIo, type ProbeResult }
+
 /** A single thing the executor must do. */
-export type SyncAction =
-  | { kind: 'create-folder'; relPath: string }
+export type SyncAction =  | { kind: 'create-folder'; relPath: string }
   | { kind: 'upload'; relPath: string; localPath: string; md5: string; size: number }
   | {
       kind: 'replace-content'
@@ -229,11 +230,24 @@ export async function diffMirror(input: DiffInput): Promise<SyncPlan> {
     }
 
     // --- P9: retired record at this path, no Drive file -------------
-    const retiredHere = Object.values(manifest.retired).filter(
-      (r) => canon(r.path) === path,
-    )
+    const retiredHere = Object.values(manifest.retired)
+      .filter((r) => canon(r.path) === path)
+      .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
     if (retiredHere.length > 0) {
-      notImplemented('P9 / group D')
+      const newest = retiredHere[0]!
+      const id = Object.keys(manifest.retired).find(
+        (key) => manifest.retired[key] === newest,
+      )!
+      const result = await groupD(input, path, localEntry, id, newest)
+      if (result?.step) {
+        steps.push(result.step)
+        if (result.step.report) reports.push(result.step.report)
+      }
+      if (result?.followUp) {
+        steps.push(result.followUp)
+        if (result.followUp.report) reports.push(result.followUp.report)
+      }
+      continue
     }
 
     // --- P10: a local file we have never tracked ---------------------
@@ -654,10 +668,210 @@ function compareContent(
   return current !== baseline
 }
 
+/**
+ * Group D — a retired record at this path, with no Drive file present.
+ *
+ * This is the group that handles the user re-creating a file they had
+ * deleted: the Drive copy is either still in Trash (restore it) or gone
+ * (upload a new one).
+ */
+async function groupD(
+  input: DiffInput,
+  path: string,
+  localEntry: LocalEntry | undefined,
+  recordId: string,
+  record: RetiredRecord,
+): Promise<GroupResult | null> {
+  const { io, mergeOnly } = input
+  const localPresent = localEntry?.state === 'present'
+
+  // D5 — nothing local. The retired record stays as it is.
+  if (!localPresent) return null
+
+  const localMd5 = await io.md5Of(path)
+  const localSize = localEntry?.size ?? 0
+
+  /** Upload the local file as a new Drive file. */
+  const uploadNew = (state: RetiredState, driveFileId: string): GroupResult => ({
+    step: {
+      action: {
+        kind: 'upload',
+        relPath: path,
+        localPath: path,
+        md5: localMd5 ?? '',
+        size: localSize,
+      },
+      ops: [
+        { op: 'set-retired', id: driveFileId, record: { ...record, state, at: new Date().toISOString() } },
+        {
+          op: 'set-file',
+          path,
+          entry: {
+            displayPath: path,
+            driveFileId: '',
+            driveMd5: null,
+            driveModifiedTime: '',
+            driveMimeType: 'application/octet-stream',
+            exportMime: null,
+            localPath: path,
+            localMd5,
+            localSize,
+            localMtimeMs: localEntry?.mtimeMs ?? 0,
+          },
+        },
+      ],
+    },
+  })
+
+  // D2 — somebody else trashed it. The app must not undo that, and must
+  // not re-upload over it either: the user's deletion stands.
+  if (record.state === 'trashed-externally') {
+    return {
+      step: {
+        action: null,
+        report: {
+          code: 'unbacked-up',
+          relPath: path,
+          message:
+            'this file was moved to the Drive trash by someone else; it was left alone and is not backed up',
+        },
+        ops: [],
+      },
+    }
+  }
+
+  // D3 / D4 — the Drive file is gone for good. Upload the local one.
+  if (record.state === 'gone' || record.state === 'purged' || record.state === 'rebased') {
+    return uploadNew(record.state === 'purged' ? 'purged' : 'gone', recordId)
+  }
+
+  // D1 — the Drive copy is still in Trash. The user has re-created the file
+  // locally, so restore the Drive copy and give it the new content.
+  if (record.state === 'trashed') {
+    // A rebase must not perform destructive actions; restoring a file from
+    // the Trash and rewriting its content is one.
+    if (mergeOnly) {
+      return {
+        step: {
+          action: null,
+          report: {
+            code: 'deferred-trash',
+            relPath: path,
+            message: 'the Drive copy is in the trash; it will be restored after the rebase finishes',
+          },
+          ops: [],
+        },
+      }
+    }
+
+    const probe = await io.probe(recordId)
+
+    if (probe.status === 'missing') {
+      // Google purged it from the Trash. Upload a new file.
+      return uploadNew('purged', recordId)
+    }
+
+    if (probe.status === 'alive' && probe.currentPath && probe.currentPath !== path) {
+      // It was restored *and* moved elsewhere. The file at this path is
+      // genuinely new.
+      return uploadNew('moved', recordId)
+    }
+
+    if (probe.status === 'alive') {
+      // It was restored but not moved. It is live at this path; replace its
+      // content in place, keeping the Drive file id.
+      return {
+        step: {
+          action: {
+            kind: 'replace-content',
+            relPath: path,
+            localPath: path,
+            driveFileId: recordId,
+            md5: localMd5 ?? '',
+            size: localSize,
+          },
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: {
+                displayPath: path,
+                driveFileId: recordId,
+                driveMd5: null,
+                driveModifiedTime: '',
+                driveMimeType: record.driveMimeType,
+                exportMime: null,
+                localPath: path,
+                localMd5,
+                localSize,
+                localMtimeMs: localEntry?.mtimeMs ?? 0,
+              },
+            },
+            {
+              op: 'set-retired',
+              id: recordId,
+              record: { ...record, state: 'resynced', at: new Date().toISOString() },
+            },
+          ],
+        },
+      }
+    }
+
+    // The file is still in the Trash. Restore it, then replace its content
+    // with the local file. Two steps, because the restore must happen
+    // before the content can be written, and the content replacement is
+    // what actually carries the user's new version.
+    return {
+      step: {
+        action: { kind: 'untrash', relPath: path, driveFileId: recordId },
+        ops: [],
+      },
+      followUp: {
+        action: {
+          kind: 'replace-content',
+          relPath: path,
+          localPath: path,
+          driveFileId: recordId,
+          md5: localMd5 ?? '',
+          size: localSize,
+        },
+        ops: [
+          {
+            op: 'set-file',
+            path,
+            entry: {
+              displayPath: path,
+              driveFileId: recordId,
+              driveMd5: null,
+              driveModifiedTime: '',
+              driveMimeType: record.driveMimeType,
+              exportMime: null,
+              localPath: path,
+              localMd5,
+              localSize,
+              localMtimeMs: localEntry?.mtimeMs ?? 0,
+            },
+          },
+          {
+            op: 'set-retired',
+            id: recordId,
+            record: { ...record, state: 'resynced', at: new Date().toISOString() },
+          },
+        ],
+      },
+    }
+  }
+
+  // Any other state: the file is not on Drive and the local one is new.
+  return uploadNew('gone', recordId)
+}
+
 /** A group result: an optional step and an optional report. */
 interface GroupResult {
   step?: PlanStep
   report?: Report
+  /** A second step that must run after `step`. */
+  followUp?: PlanStep
 }
 
 /**
