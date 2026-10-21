@@ -286,7 +286,7 @@ The mirror list, the schedule, the backup copies and the pending notice all live
     removedAt?: string
   }
   export interface MirrorProblem { field: 'name' | 'root' | 'drivePath'; message: string }
-  export function defaultMirrors(): MirrorConfig[]
+  export function mirrorConfigsFromManifest(manifest: Manifest): MirrorConfig[]
   export function isValidMirrorName(name: string): boolean
   export function isValidDrivePath(drivePath: string): boolean
   export function overlaps(rootA: string, rootB: string): boolean
@@ -297,6 +297,8 @@ The mirror list, the schedule, the backup copies and the pending notice all live
   export function suggestDrivePath(name: string): string
   ```
 
+  **There is no `defaultMirrors()`.** The four trees the app was originally built for are **not** hardcoded in `src/` — a literal `E:` in the source would defeat goal G6 (the app must run on a machine without an `E:` drive), and a fresh install by someone else must not be handed four broken mirrors. The four trees are recovered from the **manifest**, which already holds their names and roots, by `mirrorConfigsFromManifest`. A fresh install starts with an empty mirror list.
+
 - [ ] **Step 1: Write the failing test**
 
   `test/mirrorConfig.test.ts`:
@@ -304,13 +306,19 @@ The mirror list, the schedule, the backup copies and the pending notice all live
   ```ts
   import { describe, expect, it } from 'vitest'
   import { defaultMirrors, isValidDrivePath, isValidMirrorName, overlaps, suggestDrivePath, validateMirror } from '../src/core/mirrorConfig'
+  import { emptyManifest } from '../src/core/manifest'
 
   describe('mirror configuration', () => {
-    it('seeds the four trees the app was built for', () => {
-      const mirrors = defaultMirrors()
-      expect(mirrors.map((m) => m.name)).toEqual(['Medicine', 'graphicDesign', 'videoEditing', 'whoami'])
-      expect(mirrors.every((m) => m.enabled)).toBe(true)
-      expect(mirrors[0]!.drivePath).toBe('Medicine')
+    it('turns the mirrors in a manifest into configurations', () => {
+      const manifest = emptyManifest()
+      manifest.mirrors.Medicine = { root: 'E:\\Medicine', lastCounts: {}, rebase: null, dirs: {}, files: {}, retired: {} }
+      const mirrors = mirrorConfigsFromManifest(manifest)
+      expect(mirrors).toHaveLength(1)
+      expect(mirrors[0]).toEqual({ name: 'Medicine', root: 'E:\\Medicine', drivePath: 'Medicine', enabled: true })
+    })
+
+    it('produces nothing from an empty manifest', () => {
+      expect(mirrorConfigsFromManifest(emptyManifest())).toEqual([])
     })
 
     it('refuses a name that differs only by case from an existing one', () => {
@@ -374,7 +382,7 @@ The mirror list, the schedule, the backup copies and the pending notice all live
 
   `validateMirror(candidate, existing)` returns an array of problems — empty means valid. It checks the name against `isValidMirrorName`, checks the name against every existing mirror's name case-insensitively, checks the root against every existing root with `overlaps`, and checks `drivePath` with `isValidDrivePath`.
 
-  `defaultMirrors()` returns the four trees with their roots, `drivePath` equal to the name, and `enabled: true`.
+  `mirrorConfigsFromManifest(manifest)` turns each manifest mirror into a configuration: the manifest key is the name, `mirrorManifest.root` is the root, `drivePath` is `mirrorManifest.driveFolderName ?? name`, and `enabled` is true. A mirror with no root is skipped.
 
   In `src/main/settings.ts`, delete the local `MirrorConfig` interface and add `export type { MirrorConfig } from '../core/mirrorConfig'`.
 
