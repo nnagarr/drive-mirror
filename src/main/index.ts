@@ -7,7 +7,7 @@
  * closes again. Nothing is exposed to the network.
  */
 
-import { app, BrowserWindow, Notification, powerMonitor, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, Notification, powerMonitor, safeStorage, shell } from 'electron'
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { createDriveClient } from '../drive/httpClient'
 import { buildAuthUrl, exchangeCode, refreshAccessToken } from '../drive/oauth'
 import { createLogger } from '../core/logger'
-import { createManifestStore } from '../core/manifest'
+import { createManifestStore, emptyManifest } from '../core/manifest'
 import { mirrorConfigsFromManifest } from '../core/mirrorConfig'
 import { appDataDir, createCredentialStore, createSettingsStore } from './settings'
 import type { Settings } from './settings'
@@ -23,6 +23,7 @@ import { registerIpc } from './ipc'
 import { createMainWindow } from './window'
 import { createRunner } from './runner'
 import { createScheduler } from './scheduler'
+import { setPendingNotice } from './notice'
 import { registerTask, taskExists, unregisterTask } from './taskScheduler'
 import type { AppEvent } from './ipc'
 import type { OAuthTokens } from '../drive/oauth'
@@ -48,6 +49,18 @@ function emit(event: AppEvent): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(EVENT_CHANNEL, event)
   }
+  if (!mainWindow && (event.type === 'notice' || event.type === 'error')) {
+    // There is no window to show this in, so it waits for the next time
+    // the app is opened.
+    void rememberNotice(event.message)
+  }
+}
+
+/** Leave a note for the user for something that happened unwatched. */
+async function rememberNotice(message: string): Promise<void> {
+  const settings = await currentSettings()
+  const next = await setPendingNotice(settings, message, new Date())
+  await settingsStore.write(next)
 }
 
 /* ------------------------------------------------------------------ */
@@ -400,6 +413,37 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       async pruneSuperseded() {
         const current = await currentSettings()
         return pruneSuperseded(current.supersededPath)
+      },
+      async chooseFolder() {
+        const options = {
+          title: 'Choose a folder to mirror',
+          properties: ['openDirectory' as const],
+        }
+        const result = mainWindow
+          ? await dialog.showOpenDialog(mainWindow, options)
+          : await dialog.showOpenDialog(options)
+        if (result.canceled || result.filePaths.length === 0) return null
+        return result.filePaths[0] ?? null
+      },
+      async resetConnection() {
+        // The token, the client id and the secret go. The manifest, the
+        // mirrors, the schedule and the backups stay: they are the user's
+        // work, not the connection's.
+        await rm(tokenFile(), { force: true })
+        await credentialStore.clear()
+      },
+      async startFreshManifest() {
+        // The old manifest is kept, so a change of heart costs nothing.
+        const archiveDir = join(appDataDir(), 'manifest-archive')
+        await mkdir(archiveDir, { recursive: true })
+        const manifest = await store.read()
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+        await writeFile(
+          join(archiveDir, `manifest-${stamp}.json`),
+          JSON.stringify(manifest, null, 2),
+          'utf8',
+        )
+        await store.write(emptyManifest())
       },
       onError: (message: string) => {
         emit({ type: 'error', message })

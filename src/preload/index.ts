@@ -11,6 +11,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppEvent, AppState, RunSummary } from '../main/ipc'
 import type { Settings } from '../main/settings'
+import type { ScheduleConfig } from '../main/settings'
 
 export interface DriveMirrorApi {
   getState(): Promise<AppState>
@@ -26,6 +27,32 @@ export interface DriveMirrorApi {
   showManifest(): Promise<void>
   revealSuperseded(): Promise<void>
   pruneSuperseded(): Promise<{ freedBytes: number }>
+  /** Ask the user for a folder to mirror. */
+  chooseFolder(): Promise<string | null>
+  addMirror(config: {
+    name: string
+    root: string
+    drivePath: string
+  }): Promise<{ ok: true } | { ok: false; message: string }>
+  updateMirror(config: {
+    name: string
+    drivePath: string
+  }): Promise<{ ok: true } | { ok: false; message: string }>
+  removeMirror(name: string): Promise<{ ok: true }>
+  setMirrorEnabled(name: string, enabled: boolean): Promise<{ ok: true }>
+  getSchedule(): Promise<ScheduleConfig>
+  saveSchedule(patch: Partial<ScheduleConfig>): Promise<ScheduleConfig>
+  /** Forget the Google connection: the token, the client id and the secret. */
+  resetConnection(): Promise<{ ok: true }>
+  /** Archive the manifest and start a new one, for a different account. */
+  startFreshManifest(): Promise<{ ok: true }>
+  /** Pull a restored file back down to the disk. */
+  downloadRestored(
+    mirror: string,
+    driveFileId: string,
+  ): Promise<{ ok: true; path: string } | { ok: false; message: string }>
+  /** Open a link in the browser, never inside the app. */
+  openExternal(url: string): Promise<void>
   onEvent(cb: (event: AppEvent) => void): () => void
 }
 
@@ -49,6 +76,20 @@ const api: DriveMirrorApi = {
   showManifest: () => ipcRenderer.invoke('drive-mirror:show-manifest'),
   revealSuperseded: () => ipcRenderer.invoke('drive-mirror:reveal-superseded'),
   pruneSuperseded: () => ipcRenderer.invoke('drive-mirror:prune-superseded'),
+  chooseFolder: () => ipcRenderer.invoke('drive-mirror:choose-folder'),
+  addMirror: (config) => ipcRenderer.invoke('drive-mirror:add-mirror', config),
+  updateMirror: (config) => ipcRenderer.invoke('drive-mirror:update-mirror', config),
+  removeMirror: (name: string) => ipcRenderer.invoke('drive-mirror:remove-mirror', name),
+  setMirrorEnabled: (name: string, enabled: boolean) =>
+    ipcRenderer.invoke('drive-mirror:set-mirror-enabled', name, enabled),
+  getSchedule: () => ipcRenderer.invoke('drive-mirror:get-schedule'),
+  saveSchedule: (patch: Partial<ScheduleConfig>) =>
+    ipcRenderer.invoke('drive-mirror:save-schedule', patch),
+  resetConnection: () => ipcRenderer.invoke('drive-mirror:reset-connection'),
+  startFreshManifest: () => ipcRenderer.invoke('drive-mirror:start-fresh-manifest'),
+  downloadRestored: (mirror: string, driveFileId: string) =>
+    ipcRenderer.invoke('drive-mirror:download-restored', mirror, driveFileId),
+  openExternal: (url: string) => ipcRenderer.invoke('drive-mirror:open-external', url),
 
   onEvent(cb: (event: AppEvent) => void): () => void {
     const listener = (_event: unknown, payload: AppEvent): void => {

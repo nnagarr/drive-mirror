@@ -37,6 +37,7 @@ import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { writeAtomic } from '../core/atomic'
 import { buildDriveTree, FOLDER_MIME } from '../core/driveTree'
+import { resolveMirrorPath } from '../core/drivePath'
 import { checkCountDrop, checkVolumeFingerprint, rebaseMirror } from '../core/guards'
 import { exportInfoFor } from '../core/googleMime'
 import { scanLocal } from '../core/localScan'
@@ -66,6 +67,9 @@ export const MY_DRIVE_ID = 'root'
 /** How long a lock file may be old before it is treated as stale. */
 const LOCK_STALE_MS = 6 * 60 * 60 * 1000
 
+/** How long a removed mirror is remembered before it is forgotten. */
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
+
 /** What the runner needs from the outside world. */
 export interface RunnerDeps {
   client: DriveClient
@@ -90,6 +94,8 @@ export interface RunnerDeps {
   hasCredentials?: () => boolean | Promise<boolean>
   /** The signed-in account, when it is known. */
   accountEmail?: () => string | null | Promise<string | null>
+  /** Save part of the settings. */
+  saveSettings?: (patch: Partial<Settings>) => Promise<Settings>
   /**
    * Where a message about the run that is not an error goes.
    *
@@ -114,6 +120,39 @@ export interface Runner {
    * with the Drive copy winning - the only surviving version of the work.
    */
   rebase(mirrorName: string): Promise<void>
+
+  /**
+   * Move a mirror's folder on Drive to a new destination.
+   *
+   * The folder is moved rather than copied: the file ids stay valid, so the
+   * manifest keeps working and nothing is uploaded again.
+   */
+  moveMirrorDestination(
+    mirrorName: string,
+    drivePath: string,
+  ): Promise<{ ok: true } | { ok: false; message: string }>
+
+  /**
+   * Forget the mirrors the user removed more than thirty days ago.
+   *
+   * Their history goes: the file list, the retired records, the counts.
+   * The superseded copies on disk are left alone - they are the only local
+   * copies of the bytes the app replaced, and the user prunes those
+   * themselves.
+   */
+  pruneRemovedMirrors(): Promise<number>
+
+  /**
+   * Pull a restored file back down to the disk.
+   *
+   * A file the app trashed, that the user then restored on Drive, can be
+   * brought back. Nothing is overwritten: if something is already at the
+   * path and it is not the same file, the download is refused.
+   */
+  downloadRestored(
+    mirrorName: string,
+    driveFileId: string,
+  ): Promise<{ ok: true; path: string } | { ok: false; message: string }>
 }
 
 /** The counts a mirror reports. */
@@ -154,6 +193,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       lastSyncedAt: null,
       status: 'idle',
       counts: noCounts(),
+      recovered: [],
     }
     cards.set(name, created)
     return created
@@ -174,12 +214,20 @@ export function createRunner(deps: RunnerDeps): Runner {
    * cards are only what the last run learned about them. A mirror the user
    * added a moment ago therefore has a card at once.
    */
-  function buildState(settings: Settings): AppState {
+  function buildState(settings: Settings, manifest: Manifest): AppState {
     return {
       mirrors: configuredMirrors(settings).map((config) => {
         const mirrorCard = card(config.name)
         mirrorCard.localRoot = config.root
         mirrorCard.drivePath = `My Drive/${config.drivePath}`
+        // The files the user restored on Drive, waiting to be pulled back.
+        mirrorCard.recovered = Object.values(manifest.mirrors[config.name]?.retired ?? {})
+          .filter((record) => record.state === 'restored')
+          .map((record) => ({
+            driveFileId: record.id,
+            path: record.path,
+            at: record.at,
+          }))
         return { ...mirrorCard }
       }),
       running: running.value,
@@ -195,7 +243,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       try {
         await refreshAuth()
         const settings = await deps.settings()
-        deps.emit({ type: 'state', state: buildState(settings) })
+        const manifest = await deps.store.read()
+        deps.emit({ type: 'state', state: buildState(settings, manifest) })
       } catch {
         // The state event is a picture of the app for the interface. A
         // failure to draw it must not take the run down with it.
@@ -510,7 +559,15 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       summary.finishedAt = new Date().toISOString()
       await deps.store.checkpoint(manifest)
-      await writeBackups(settings.backupPaths, manifest, deps.log)
+      const backups = await writeBackups(settings.backupPaths, manifest, deps.log)
+      for (const path of backups.failed) {
+        // The sync itself is fine, but the safety net is not being
+        // refreshed, and the user has to know that.
+        deps.emit({
+          type: 'notice',
+          message: `the backup copy at ${path} could not be written, so the manifest has no safety net there`,
+        })
+      }
 
       lastRun.value = summary
       deps.emit({ type: 'finished', summary })
@@ -617,6 +674,176 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
     },
 
+    async moveMirrorDestination(
+      mirrorName: string,
+      drivePath: string,
+    ): Promise<{ ok: true } | { ok: false; message: string }> {
+      const settings = await deps.settings()
+      const config = settings.mirrors.find((m) => m.name === mirrorName)
+      if (!config) {
+        return { ok: false, message: `There is no mirror called ${mirrorName}.` }
+      }
+      if (config.drivePath === drivePath) return { ok: true }
+
+      const manifest = await deps.store.read()
+      const mirrorManifest = manifest.mirrors[mirrorName]
+      const folderId = mirrorManifest?.driveFolderId
+      if (!folderId) {
+        // Nothing is on Drive for this mirror yet, so there is nothing to
+        // move. The next run puts it where it belongs.
+        return { ok: true }
+      }
+
+      const segments = drivePath.split('/').filter((s) => s.length > 0)
+      const newName = segments[segments.length - 1] ?? config.name
+      const parentPath = segments.slice(0, -1).join('/')
+
+      let parentId = MY_DRIVE_ID
+      if (parentPath) {
+        const resolved = await resolveMirrorPath(deps.client, parentPath, MY_DRIVE_ID)
+        if ('ambiguous' in resolved) {
+          return {
+            ok: false,
+            message:
+              `There is more than one folder called ${resolved.segment} on Drive, ` +
+              'so the folder was not moved.',
+          }
+        }
+        parentId = resolved.id
+      }
+
+      try {
+        await deps.client.moveFolder(folderId, parentId, newName)
+      } catch (err) {
+        return {
+          ok: false,
+          message:
+            'The folder on Drive could not be moved: ' +
+            (err instanceof Error ? err.message : String(err)),
+        }
+      }
+
+      // The id does not change when a folder moves, so the manifest keeps
+      // working and nothing is uploaded again.
+      if (mirrorManifest) {
+        mirrorManifest.driveFolderName = newName
+        mirrorManifest.drivePath = drivePath
+      }
+      await deps.store.checkpoint(manifest)
+      return { ok: true }
+    },
+
+    async pruneRemovedMirrors(): Promise<number> {
+      const settings = await deps.settings()
+      const manifest = await deps.store.read()
+      const cutoff = Date.now() - THIRTY_DAYS_MS
+      const forgotten: string[] = []
+      for (const config of settings.mirrors) {
+        if (!config.removedAt) continue
+        if (Date.parse(config.removedAt) > cutoff) continue
+        if (!manifest.mirrors[config.name]) continue
+        delete manifest.mirrors[config.name]
+        forgotten.push(config.name)
+      }
+      if (forgotten.length === 0) return 0
+      await deps.store.checkpoint(manifest)
+      // The configuration goes too, so the mirror is forgotten entirely.
+      if (deps.saveSettings) {
+        const current = await deps.settings()
+        await deps.saveSettings({
+          mirrors: current.mirrors.filter((m) => !forgotten.includes(m.name)),
+        })
+      }
+      return forgotten.length
+    },
+
+    async downloadRestored(
+      mirrorName: string,
+      driveFileId: string,
+    ): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
+      const settings = await deps.settings()
+      const config = settings.mirrors.find((m) => m.name === mirrorName)
+      if (!config) {
+        return { ok: false, message: `There is no mirror called ${mirrorName}.` }
+      }
+
+      const manifest = await deps.store.read()
+      const mirrorManifest = manifest.mirrors[mirrorName]
+      const record = Object.values(mirrorManifest?.retired ?? {}).find(
+        (r) => r.id === driveFileId,
+      )
+      if (!record) {
+        return {
+          ok: false,
+          message: 'That file is not one this app stopped tracking.',
+        }
+      }
+      if (record.state !== 'restored') {
+        return { ok: false, message: 'That file is not waiting to be recovered.' }
+      }
+
+      // The path it lands at: the export path for a Google-native file,
+      // and the relative path for anything else.
+      const relPath = record.localPath ?? record.path
+      const dest = join(config.root, ...relPath.split('/'))
+
+      const node = await deps.client.getFile(driveFileId)
+      if (!node) {
+        return { ok: false, message: 'That file is not on Drive any more.' }
+      }
+
+      // Something is already there. It is only replaced when it is
+      // provably the same file.
+      const existing = await md5OfFile(dest)
+      if (existing !== null) {
+        if (!node.entry.md5Checksum || existing !== node.entry.md5Checksum) {
+          return {
+            ok: false,
+            message:
+              `There is already a file at ${relPath}, and it is not the same one. ` +
+              'Nothing was replaced.',
+          }
+        }
+      }
+
+      try {
+        const native = exportInfoFor(record.driveMimeType)
+        if (native) {
+          await deps.client.exportTo(driveFileId, dest, native.exportMime)
+        } else {
+          await deps.client.downloadTo(driveFileId, dest)
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          message:
+            'The file could not be brought back: ' +
+            (err instanceof Error ? err.message : String(err)),
+        }
+      }
+
+      // The file is live again.
+      const info = await stat(dest).catch(() => null)
+      const localMd5 = (await md5OfFile(dest)) ?? node.entry.md5Checksum ?? null
+      record.state = 'resynced'
+      if (mirrorManifest) {
+        mirrorManifest.files[record.path] = {
+          displayPath: record.path,
+          driveFileId,
+          driveMd5: node.entry.md5Checksum ?? null,
+          driveModifiedTime: node.entry.modifiedTime,
+          driveMimeType: node.entry.mimeType,
+          exportMime: exportInfoFor(node.entry.mimeType)?.exportMime ?? null,
+          localPath: relPath,
+          localMd5,
+          localSize: info?.size ?? 0,
+          localMtimeMs: info?.mtimeMs ?? 0,
+        }
+      }
+      await deps.store.checkpoint(manifest)
+      return { ok: true, path: relPath }
+    },
+
     async syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }) {
       // A run that is already going is the run. A second "Sync now"
       // joins it rather than starting a second one, because two runs
@@ -630,7 +857,8 @@ export function createRunner(deps: RunnerDeps): Runner {
 
     async state(): Promise<AppState> {
       const settings = await deps.settings()
-      return buildState(settings)
+      const manifest = await deps.store.read()
+      return buildState(settings, manifest)
     },
   }
 

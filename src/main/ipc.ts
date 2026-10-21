@@ -8,9 +8,11 @@
  */
 
 import { ipcMain, shell } from 'electron'
+import { validateMirror } from '../core/mirrorConfig'
+import { isValidShape } from '../core/schedule'
 import type { Report } from '../core/types'
 import type { Runner } from './runner'
-import type { Settings } from './settings'
+import type { ScheduleConfig, Settings } from './settings'
 
 /** What the interface shows for one mirror. */
 export interface MirrorCard {
@@ -21,6 +23,18 @@ export interface MirrorCard {
   lastSyncedAt: string | null
   status: 'idle' | 'syncing' | 'skipped' | 'attention' | 'error'
   counts: { uploaded: number; updated: number; downloaded: number; trashed: number; errors: number }
+  /** Files the app trashed that the user has since restored on Drive. */
+  recovered: RecoveredFile[]
+}
+
+/** A file that is waiting to be pulled back down to the disk. */
+export interface RecoveredFile {
+  /** The Drive file's id. */
+  driveFileId: string
+  /** The path it had inside the mirror. */
+  path: string
+  /** When it was restored. */
+  at: string
 }
 
 /** What a run did. */
@@ -53,6 +67,7 @@ export type AppEvent =
   | { type: 'progress'; mirror: string; relPath: string; phase: string; done: number; total: number }
   | { type: 'finished'; summary: RunSummary }
   | { type: 'guard'; mirror: string; reason: string; message: string; canOverride: boolean }
+  | { type: 'notice'; message: string }
   | { type: 'error'; message: string }
 
 /** What the handlers need from the app. */
@@ -67,6 +82,12 @@ export interface IpcDeps {
   showManifest(): Promise<void>
   revealSuperseded(): Promise<void>
   pruneSuperseded(): Promise<{ freedBytes: number }>
+  /** Ask the user for a folder to mirror. */
+  chooseFolder(): Promise<string | null>
+  /** Forget the Google connection: the token, the client id and the secret. */
+  resetConnection(): Promise<void>
+  /** Archive the manifest and start a new one, for a different account. */
+  startFreshManifest(): Promise<void>
   /** Called when the run as a whole fails. */
   onError?: (message: string) => void
 }
@@ -138,6 +159,112 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle('drive-mirror:reveal-superseded', () => deps.revealSuperseded())
 
   ipcMain.handle('drive-mirror:prune-superseded', () => deps.pruneSuperseded())
+
+  ipcMain.handle('drive-mirror:choose-folder', async () => deps.chooseFolder())
+
+  ipcMain.handle(
+    'drive-mirror:add-mirror',
+    async (_event, config: { name: string; root: string; drivePath: string }) => {
+      const settings = await deps.getSettings()
+      const problems = validateMirror(config, settings.mirrors)
+      if (problems.length > 0) {
+        return { ok: false, message: problems.map((p) => p.message).join(' ') }
+      }
+      await deps.saveSettings({
+        mirrors: [...settings.mirrors, { ...config, enabled: true }],
+      })
+      return { ok: true }
+    },
+  )
+
+  ipcMain.handle(
+    'drive-mirror:update-mirror',
+    async (_event, config: { name: string; drivePath: string }) => {
+      const settings = await deps.getSettings()
+      const existing = settings.mirrors.find((m) => m.name === config.name)
+      if (!existing) {
+        return { ok: false, message: `There is no mirror called ${config.name}.` }
+      }
+      // The mirror itself is not a clash with itself.
+      const problems = validateMirror(
+        { name: existing.name, root: existing.root, drivePath: config.drivePath },
+        settings.mirrors.filter((m) => m.name !== existing.name),
+      )
+      if (problems.length > 0) {
+        return { ok: false, message: problems.map((p) => p.message).join(' ') }
+      }
+      if (existing.drivePath !== config.drivePath) {
+        const moved = await deps.runner.moveMirrorDestination(existing.name, config.drivePath)
+        if (!moved.ok) return moved
+      }
+      await deps.saveSettings({
+        mirrors: settings.mirrors.map((m) =>
+          m.name === existing.name ? { ...m, drivePath: config.drivePath } : m,
+        ),
+      })
+      return { ok: true }
+    },
+  )
+
+  ipcMain.handle('drive-mirror:remove-mirror', async (_event, name: string) => {
+    const settings = await deps.getSettings()
+    await deps.saveSettings({
+      mirrors: settings.mirrors.map((m) =>
+        m.name === name
+          ? { ...m, removedAt: new Date().toISOString(), enabled: false }
+          : m,
+      ),
+    })
+    return { ok: true }
+  })
+
+  ipcMain.handle(
+    'drive-mirror:set-mirror-enabled',
+    async (_event, name: string, enabled: boolean) => {
+      const settings = await deps.getSettings()
+      await deps.saveSettings({
+        mirrors: settings.mirrors.map((m) => (m.name === name ? { ...m, enabled } : m)),
+      })
+      return { ok: true }
+    },
+  )
+
+  ipcMain.handle('drive-mirror:get-schedule', async () => {
+    const settings = await deps.getSettings()
+    return settings.schedule
+  })
+
+  ipcMain.handle(
+    'drive-mirror:save-schedule',
+    async (_event, patch: Partial<ScheduleConfig>) => {
+      const settings = await deps.getSettings()
+      if (patch.shape && !isValidShape(patch.shape)) {
+        throw new Error('that schedule cannot be run')
+      }
+      // The schedule is merged, not replaced: a change to one part of it
+      // must not wipe the rest.
+      const next = { ...settings.schedule, ...patch }
+      await deps.saveSettings({ schedule: next })
+      return next
+    },
+  )
+
+  ipcMain.handle('drive-mirror:reset-connection', async () => {
+    await deps.resetConnection()
+    return { ok: true }
+  })
+
+  ipcMain.handle('drive-mirror:start-fresh-manifest', async () => {
+    await deps.startFreshManifest()
+    return { ok: true }
+  })
+
+  ipcMain.handle(
+    'drive-mirror:download-restored',
+    async (_event, mirror: string, driveFileId: string) => {
+      return deps.runner.downloadRestored(mirror, driveFileId)
+    },
+  )
 
   // A link the app opens is opened by the operating system, never inside
   // the app window.
