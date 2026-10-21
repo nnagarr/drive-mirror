@@ -31,7 +31,9 @@ export default defineConfig({
     plugins: [react()],
     build: {
       rollupOptions: {
-        input: 'src/renderer/index.html',
+        // The input is resolved against the renderer's root, which is
+        // already src/renderer.
+        input: 'index.html',
       },
     },
   },
