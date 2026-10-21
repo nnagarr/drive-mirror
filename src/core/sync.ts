@@ -335,7 +335,10 @@ function folderIdFor(manifest: MirrorManifest, dir: string): string | undefined 
  * file on disk is called "Scene.psd" and the plan says "scene.psd"; using
  * the plan's spelling would rename the user's file on Drive.
  */
-async function localDisplayName(root: string, relPath: string): Promise<string | null> {
+export async function localDisplayName(
+  root: string,
+  relPath: string,
+): Promise<string | null> {
   const segments = relPath.split('/').filter((s) => s.length > 0)
   if (segments.length === 0) return null
 

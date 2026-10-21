@@ -125,6 +125,22 @@ export class FakeDrive implements DriveClient {
   async listChildren(folderId: string): Promise<DriveNode[]> {
     this.record({ op: 'list', id: folderId })
     const out: DriveNode[] = []
+
+    for (const folder of this.folders.values()) {
+      if (folder.parentId !== folderId) continue
+      out.push({
+        entry: {
+          id: folder.id,
+          name: folder.name,
+          mimeType: 'application/vnd.google-apps.folder',
+          modifiedTime: '2026-10-20T18:00:00.000Z',
+          trashed: false,
+          parents: [folder.parentId],
+        },
+        parentPath: '',
+      })
+    }
+
     for (const file of this.files.values()) {
       if (!file.trashed && file.parents.includes(folderId)) {
         out.push(this.node(file))
