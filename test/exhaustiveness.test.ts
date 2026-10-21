@@ -284,6 +284,12 @@ describe('diff engine exhaustiveness', () => {
   it('INV-3: every usable Drive file is adopted or reported', async () => {
     for (const cell of allCells()) {
       if (cell.drive !== 'usable') continue
+      // The spec's rule R2 is an enumerated no-op: a file the user
+      // restored from the Drive trash is left alone permanently, and the
+      // app stays quiet about it. It is not "adopted" and it is not
+      // "reported" - on purpose.
+      if (cell.retiredState === 'restored' && cell.local === 'absent') continue
+
       const input = inputsFor(cell)
       const plan = await diffMirror(input)
       const hasLiveEntry = plan.steps.some((s) => s.ops.some((o) => o.op === 'set-file'))

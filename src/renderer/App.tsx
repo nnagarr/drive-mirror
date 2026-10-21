@@ -54,6 +54,14 @@ export function App(): JSX.Element {
         case 'state':
           setState(event.state)
           setSummary(event.state.lastRun)
+          // A banner about a guard that is no longer tripping is stale
+          // news. It goes when the mirror it was about is no longer
+          // being skipped.
+          setGuard((current) => {
+            if (!current) return current
+            const mirror = event.state.mirrors.find((m) => m.name === current.mirror)
+            return mirror && mirror.status === 'skipped' ? current : null
+          })
           break
         case 'progress':
           setProgress({

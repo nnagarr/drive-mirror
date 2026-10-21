@@ -240,6 +240,26 @@ describe('buildClaimIndex', () => {
     expect(retiredClaims.has('budget.csv')).toBe(true)
   })
 
+  it('does not claim the local path of a retired ordinary file', () => {
+    // An ordinary file's retired record carries the file's OWN path. If
+    // that path were claimed, a file restored from the Drive trash would
+    // be invisible for ever: the app would never notice it, and would
+    // never report the restore.
+    const mirror = mirrorWith(
+      {},
+      {
+        '1XyZ': retired('1XyZ', 'scene.psd', 'trashed', {
+          md5: 'm1',
+          driveMimeType: 'application/octet-stream',
+          localPath: 'scene.psd',
+        }),
+      },
+    )
+    const { retiredClaims } = buildClaimIndex(mirror, new Map())
+    expect(retiredClaims.has('scene.psd')).toBe(false)
+    expect(retiredClaims.size).toBe(0)
+  })
+
   it('does not claim the export path of a retired non-native file', () => {
     const mirror = mirrorWith(
       {},

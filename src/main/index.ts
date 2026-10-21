@@ -17,6 +17,7 @@ import { buildAuthUrl, exchangeCode, refreshAccessToken } from '../drive/oauth'
 import { createLogger } from '../core/logger'
 import { createManifestStore } from '../core/manifest'
 import { appDataDir, createCredentialStore, createSettingsStore } from './settings'
+import type { Settings } from './settings'
 import { registerIpc } from './ipc'
 import { createMainWindow } from './window'
 import { createRunner } from './runner'
@@ -33,7 +34,12 @@ const logger = createLogger(join(appDataDir(), 'logs'))
 function emit(event: AppEvent): void {
   logger.log({
     level: event.type === 'error' ? 'error' : 'info',
-    message: `${event.type}${'mirror' in event ? `: ${event.mirror}` : ''}`,
+    message:
+      event.type === 'error'
+        ? event.message
+        : event.type === 'guard'
+          ? `guard: ${event.mirror}: ${event.reason}: ${event.message}`
+          : `${event.type}${'mirror' in event ? `: ${event.mirror}` : ''}`,
     relPath: 'relPath' in event ? event.relPath : undefined,
   })
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -108,6 +114,22 @@ async function accessToken(): Promise<string> {
 
 const client = createDriveClient(accessToken)
 
+/**
+ * The settings as the user should see them.
+ *
+ * The client id is not a secret - it appears in the browser's address bar
+ * during sign-in - so it is shown. The secret is never read back into the
+ * interface; the settings only say whether one is stored.
+ */
+async function currentSettings(): Promise<Settings> {
+  const settings = await settingsStore.read()
+  return {
+    ...settings,
+    clientId: credentialStore.getClientId() ?? settings.clientId,
+    clientSecretSet: credentialStore.getClientSecret() !== null,
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* The sign-in flow                                                     */
 /* ------------------------------------------------------------------ */
@@ -141,8 +163,11 @@ async function authenticate(): Promise<{ ok: boolean; email?: string }> {
 
   try {
     const state = randomBytes(16).toString('hex')
+    // The listener is attached BEFORE the browser is sent anywhere, so a
+    // fast redirect cannot arrive with nobody listening.
+    const codePromise = waitForCode(server, redirectUri, state)
     await shell.openExternal(buildAuthUrl(clientId, redirectUri, state))
-    const code = await waitForCode(server, redirectUri, state)
+    const code = await codePromise
     const tokens = await exchangeCode({
       clientId,
       clientSecret,
@@ -242,7 +267,7 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
 
-    const settings = await settingsStore.read()
+    const settings = await currentSettings()
     // The store keeps the manifest in the directory that holds it, which
     // is the one the settings show the user.
     const store = createManifestStore(appDataDir())
@@ -251,15 +276,16 @@ if (!app.requestSingleInstanceLock()) {
       store,
       settings,
       emit,
-      hasCredentials: () => Boolean(credentialStore.getClientId()),
+      hasCredentials: async () =>
+        Boolean(credentialStore.getClientId()) && (await loadTokens()) !== null,
       accountEmail: () => null,
     })
 
     registerIpc({
       runner,
-      getSettings: () => settingsStore.read(),
+      getSettings: () => currentSettings(),
       async saveSettings(patch) {
-        const current = await settingsStore.read()
+        const current = await currentSettings()
         const next = { ...current, ...patch }
         await settingsStore.write(next)
         return next
@@ -287,6 +313,9 @@ if (!app.requestSingleInstanceLock()) {
       },
       async pruneSuperseded() {
         return pruneSuperseded(settings.supersededPath)
+      },
+      onError: (message: string) => {
+        emit({ type: 'error', message })
       },
     })
 

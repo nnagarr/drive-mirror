@@ -177,6 +177,15 @@ export function buildClaimIndex(
   }
 
   for (const record of Object.values(manifest.retired)) {
+    // Only a Google-native file's retired record claims a local path, and
+    // only because that path holds an *export* - a derived artifact the app
+    // made, never user content.
+    //
+    // An ordinary file's retired record also carries a local path, but that
+    // path is the file's own path. Claiming it would make the file
+    // invisible for ever: a file that is restored from the Drive trash
+    // would never be noticed, and the app would report nothing about it.
+    if (!isGoogleNativeMime(record.driveMimeType)) continue
     if (typeof record.localPath === 'string' && record.localPath.length > 0) {
       retiredClaims.add(canon(record.localPath))
     }

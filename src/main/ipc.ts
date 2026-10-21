@@ -67,6 +67,8 @@ export interface IpcDeps {
   showManifest(): Promise<void>
   revealSuperseded(): Promise<void>
   pruneSuperseded(): Promise<{ freedBytes: number }>
+  /** Called when the run as a whole fails. */
+  onError?: (message: string) => void
 }
 
 /**
@@ -82,7 +84,11 @@ export function registerIpc(deps: IpcDeps): void {
     try {
       return await deps.runner.syncNow(mirrorName)
     } catch (err) {
+      // A failure of the run as a whole - not of one file - is reported
+      // like any other problem, so the user is told what went wrong
+      // instead of seeing a bare error count.
       const message = err instanceof Error ? err.message : String(err)
+      deps.onError?.(message)
       return {
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
@@ -93,8 +99,7 @@ export function registerIpc(deps: IpcDeps): void {
         errors: 1,
         mirrors: [],
         changed: [],
-        reports: [],
-        message,
+        reports: [{ code: 'anomaly', relPath: '', message }],
       } as RunSummary
     }
   })

@@ -984,7 +984,7 @@ Export builders that later tasks reuse:
 export function localTree(files: Record<string, Partial<LocalEntry> & { state: LocalState }>, dirs: string[] = []): LocalTree
 export function driveTree(nodes: DriveNode[]): DriveTree
 export function mirrorManifest(overrides?: Partial<MirrorManifest>): MirrorManifest
-export function diffIo(overrides?: Partial<DiffIo>): DiffIo
+export function diffIo(overrides?: Partial<DiffIo>, local?: LocalTree): DiffIo
 ```
 
 `diffIo` returns defaults where `probe` resolves `{ status: 'missing' }`, `md5Of` resolves null, `readLocalBytes` resolves null, and `exportNative` resolves null.

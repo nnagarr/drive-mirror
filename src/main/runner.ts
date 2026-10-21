@@ -65,7 +65,7 @@ export interface RunnerDeps {
   /** The trees to mirror. Defaults to the four the user asked for. */
   mirrors?: MirrorSpec[]
   /** Whether the app holds usable credentials. */
-  hasCredentials?: () => boolean
+  hasCredentials?: () => boolean | Promise<boolean>
   /** The signed-in account, when it is known. */
   accountEmail?: () => string | null
 }
@@ -130,17 +130,27 @@ export function createRunner(deps: RunnerDeps): Runner {
     return created
   }
 
+  /** Whether the app is signed in, and as whom. */
+  const auth = { signedIn: false, email: null as string | null }
+
+  async function refreshAuth(): Promise<void> {
+    auth.signedIn = deps.hasCredentials ? Boolean(await deps.hasCredentials()) : false
+    auth.email = deps.accountEmail?.() ?? null
+  }
+
   function emitState(): void {
-    deps.emit({
-      type: 'state',
-      state: {
-        mirrors: [...cards.values()],
-        running: running.value,
-        phase: phase.value,
-        lastRun: lastRun.value,
-        accountEmail: deps.accountEmail?.() ?? null,
-        needsAuth: !(deps.hasCredentials?.() ?? false),
-      },
+    void refreshAuth().then(() => {
+      deps.emit({
+        type: 'state',
+        state: {
+          mirrors: [...cards.values()],
+          running: running.value,
+          phase: phase.value,
+          lastRun: lastRun.value,
+          accountEmail: auth.email,
+          needsAuth: !auth.signedIn,
+        },
+      })
     })
   }
 
@@ -407,8 +417,8 @@ export function createRunner(deps: RunnerDeps): Runner {
         running: running.value,
         phase: phase.value,
         lastRun: lastRun.value,
-        accountEmail: deps.accountEmail?.() ?? null,
-        needsAuth: !(deps.hasCredentials?.() ?? false),
+        accountEmail: auth.email,
+        needsAuth: !auth.signedIn,
       }
     },
   }

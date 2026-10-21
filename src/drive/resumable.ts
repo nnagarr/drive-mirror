@@ -188,7 +188,7 @@ export async function verifyUploadedFile(
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      const url = `${VERIFY_ENDPOINT}?q=${encodeURIComponent(query)}&fields=${encodeURIComponent('id,name,size,md5Checksum')}`
+      const url = `${VERIFY_ENDPOINT}?q=${encodeURIComponent(query)}&fields=${encodeURIComponent('files(id,name,size,md5Checksum)')}`
       const response = await fetchImpl(url, {
         method: 'GET',
         headers: { Authorization: `Bearer ${accessToken}` },

@@ -1111,6 +1111,9 @@ async function groupR(
   // --- R2: already reported as restored; leave it alone forever -----
   if (record.state === 'restored') {
     if (localPresent) {
+      // R3: the user restored the Drive file and a local file occupies the
+      // path. Uploading would create a duplicate name; downloading would
+      // destroy the local file. Leave both alone and say so, every run.
       return {
         step: {
           action: null,
@@ -1124,35 +1127,10 @@ async function groupR(
         },
       }
     }
-    // The file is on Drive and the manifest still tracks it. The record is
-    // released so the path is governed by the ordinary rules again, and
-    // the live entry is restored: the file is neither downloaded nor
-    // trashed, but it is tracked, so the next run compares it like any
-    // other file.
-    return {
-      step: {
-        action: null,
-        ops: [
-          {
-            op: 'set-file',
-            path,
-            entry: {
-              displayPath: path,
-              driveFileId: driveFile.id,
-              driveMd5: driveFile.md5 ?? null,
-              driveModifiedTime: driveFile.driveModifiedTime,
-              driveMimeType: driveFile.mimeType,
-              exportMime: null,
-              localPath: path,
-              localMd5: null,
-              localSize: 0,
-              localMtimeMs: 0,
-            },
-          },
-          release('resynced'),
-        ],
-      },
-    }
+    // R2: nothing, ever, at any path. The user restored this file on
+    // purpose; re-trashing it would fight them. The record stays as it
+    // is, and the app stays quiet about it.
+    return null
   }
 
   // --- R4: gone or purged, yet the file exists ----------------------

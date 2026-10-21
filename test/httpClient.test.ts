@@ -68,6 +68,22 @@ describe('the Drive REST client', () => {
     expect(qOf(calls[0]!.url)).toContain('trashed = false')
   })
 
+  it('selects the file fields through the files() wrapper', async () => {
+    // A listing is a list of files, so the fields of each file have to be
+    // selected through the `files(...)` wrapper. A bare field name is read
+    // as a field of the list itself, and the API refuses it.
+    const { impl, calls } = stub(() => json({ files: [] }))
+    const client = createDriveClient(async () => 'token', { fetchImpl: impl })
+
+    await client.listChildren('F1')
+
+    const fields = new URL(calls[0]!.url).searchParams.get('fields') ?? ''
+    expect(fields.startsWith('files(')).toBe(true)
+    expect(fields).toContain('id')
+    expect(fields).toContain('md5Checksum')
+    expect(fields).toContain('trashed')
+  })
+
   it('a batched list parenthesises its OR clause', async () => {
     const { impl, calls } = stub(() => json({ files: [] }))
     const client = createDriveClient(async () => 'token', { fetchImpl: impl })

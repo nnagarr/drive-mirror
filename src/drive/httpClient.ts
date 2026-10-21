@@ -41,6 +41,16 @@ export interface DriveHttpOptions {
 /** The fields the app reads from a Drive file. */
 const LIST_FIELDS = 'id,name,mimeType,size,md5Checksum,modifiedTime,trashed,parents'
 
+/**
+ * The `fields` selector for a listing.
+ *
+ * A listing is a list of files, so the fields of each file have to be
+ * selected through the `files(...)` wrapper. A bare field name is read as a
+ * field of the list itself, which has almost none, and the API answers
+ * "Invalid field selection id".
+ */
+const LIST_SELECTOR = `files(${LIST_FIELDS}),nextPageToken`
+
 /** How many times a 5xx or a network error is retried. */
 const MAX_SERVER_RETRIES = 3
 
@@ -159,7 +169,7 @@ export function createDriveClient(
     do {
       const params: Record<string, string> = {
         q: buildListQuery(parentIds),
-        fields: LIST_FIELDS,
+        fields: LIST_SELECTOR,
         pageSize: '1000',
       }
       if (pageToken) params.pageToken = pageToken

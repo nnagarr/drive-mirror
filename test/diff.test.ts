@@ -475,6 +475,29 @@ describe('diffMirror --- group R (retired id)', () => {
     }
   })
 
+  it('notices an ordinary file restored from Drive Trash (R1, not a claim)', async () => {
+    // The retired record of an ordinary file carries the file's own path.
+    // That path must not be treated as a claim, or the restored file would
+    // be invisible for ever and the restore would never be reported.
+    const p = await plan({
+      local: localTree({ 'a.psd': 'absent' }),
+      drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
+      manifest: mirrorManifest(
+        {},
+        retiredFor('trashed', {
+          localPath: 'a.psd',
+          driveMimeType: 'application/octet-stream',
+        }),
+      ),
+    })
+
+    expect(p.reports.map((r) => r.code)).toContain('restored-from-trash')
+    const rec = p.steps.flatMap((s) => s.ops).find((o) => o.op === 'set-retired')
+    if (rec && rec.op === 'set-retired') {
+      expect(rec.record.state).toBe('restored')
+    }
+  })
+
   it('leaves a restored file alone forever (R2)', async () => {
     const p = await plan({
       local: localTree({ 'a.psd': 'absent' }),
@@ -482,8 +505,12 @@ describe('diffMirror --- group R (retired id)', () => {
       manifest: mirrorManifest({}, retiredFor('restored')),
     })
 
+    // R2: nothing, ever. No action, no report, no manifest write. The
+    // user restored this file on purpose; re-trashing it would fight
+    // them.
     expect(kinds(p)).toEqual([])
     expect(p.reports).toEqual([])
+    expect(p.steps.flatMap((s) => s.ops)).toEqual([])
   })
 
   it('reports a conflict when a restored file collides with a local file (R3)', async () => {
