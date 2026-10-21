@@ -18,7 +18,7 @@
 
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createReadStream } from 'node:fs'
@@ -391,6 +391,7 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       summary.finishedAt = new Date().toISOString()
       await deps.store.checkpoint(manifest)
+      await writeBackup(deps.settings.backupPath, manifest)
 
       running.value = false
       phase.value = 'idle'
@@ -413,6 +414,29 @@ export function createRunner(deps: RunnerDeps): Runner {
   }
 
   return runner
+}
+
+/**
+ * Keep a copy of the manifest outside the app's own directory.
+ *
+ * The manifest is the app's memory: without it, every file would look
+ * deleted. A copy somewhere else means a damaged installation, a wiped
+ * app directory, or a reinstall does not take that memory with it.
+ *
+ * A failure here does not fail the run. The manifest was already written
+ * where the app reads it.
+ */
+async function writeBackup(backupPath: string, manifest: Manifest): Promise<void> {
+  try {
+    await mkdir(backupPath, { recursive: true })
+    await writeFile(
+      join(backupPath, 'manifest.json'),
+      JSON.stringify(manifest, null, 2),
+      'utf8',
+    )
+  } catch {
+    // The backup is a convenience, not the record itself.
+  }
 }
 
 /** An empty manifest for a mirror that has never run. */

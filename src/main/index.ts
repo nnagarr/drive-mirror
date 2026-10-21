@@ -228,8 +228,24 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   void app.whenReady().then(async () => {
+    // The credentials can come from the environment, which is how the
+    // smoke test signs in without anyone typing a secret into a window.
+    if (!credentialStore.getClientId()) {
+      const envId = process.env.DRIVE_MIRROR_CLIENT_ID
+      const envSecret = process.env.DRIVE_MIRROR_CLIENT_SECRET
+      if (envId && envSecret) {
+        try {
+          await credentialStore.setCredentials(envId, envSecret)
+        } catch {
+          // The user can still enter them in Settings.
+        }
+      }
+    }
+
     const settings = await settingsStore.read()
-    const store = createManifestStore(join(appDataDir(), 'state'))
+    // The store keeps the manifest in the directory that holds it, which
+    // is the one the settings show the user.
+    const store = createManifestStore(appDataDir())
     const runner = createRunner({
       client,
       store,
