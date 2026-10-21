@@ -150,8 +150,9 @@ export interface Manifest {
   /**
    * The Google account that owns this Drive data.
    *
-   * Null when no run has recorded the account yet: not known yet, not
-   * "no account".
+   * `string | null`: `null` means "not yet known", not "no account". A
+   * value that is not a string is to be treated as `null` by whatever
+   * reads it.
    */
   accountEmail: string | null
 }

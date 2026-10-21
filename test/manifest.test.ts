@@ -373,6 +373,70 @@ describe('manifest store', () => {
       'whoami',
     ])
     expect(written.accountEmail).toBeNull()
+    expect(written.version).toBe(11)
+  })
+
+  it('writes a version 10 manifest back as version 11 and keeps every record in it', async () => {
+    const v10 = {
+      version: 10,
+      updatedAt: '2026-10-20T18:00:00.000Z',
+      volumes: {},
+      mirrors: {
+        Medicine: {
+          root: 'E:\\Medicine',
+          driveFolderName: 'Medicine',
+          lastCounts: { '': 43, incision: 29 },
+          rebase: null,
+          dirs: { incision: { driveFolderId: '1GhIjK' } },
+          files: { 'renders/scene.psd': liveEntry('renders/scene.psd') },
+          retired: {
+            D1: retiredRecord('D1', 'old.psd', 'trashed', '2026-10-19T00:00:00.000Z'),
+          },
+        },
+      },
+    }
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify(v10), 'utf8')
+
+    const store = createManifestStore(dir)
+    const first = await store.read()
+    await store.write(first)
+
+    const written = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'))
+    expect(written.version).toBe(11)
+    expect(written.accountEmail).toBeNull()
+
+    const again = await store.read()
+    expect(again.version).toBe(11)
+    expect(again.accountEmail).toBeNull()
+
+    // The history is not moved. The file entry, the retired record, the
+    // counts and the folder ids are the same as they were, byte for byte.
+    const mirror = again.mirrors.Medicine!
+    expect(mirror.root).toBe('E:\\Medicine')
+    expect(JSON.stringify(mirror.files)).toBe(JSON.stringify(v10.mirrors.Medicine.files))
+    expect(JSON.stringify(mirror.retired)).toBe(JSON.stringify(v10.mirrors.Medicine.retired))
+    expect(JSON.stringify(mirror.lastCounts)).toBe(JSON.stringify(v10.mirrors.Medicine.lastCounts))
+    expect(JSON.stringify(mirror.dirs)).toBe(JSON.stringify(v10.mirrors.Medicine.dirs))
+  })
+
+  it('checkpoints a version 10 manifest as version 11', async () => {
+    await writeFile(
+      join(dir, 'manifest.json'),
+      JSON.stringify({
+        version: 10,
+        updatedAt: '2026-10-20T18:00:00.000Z',
+        volumes: {},
+        mirrors: {},
+      }),
+      'utf8',
+    )
+    const store = createManifestStore(dir)
+    const m = await store.read()
+    await store.checkpoint(m)
+
+    const written = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'))
+    expect(written.version).toBe(11)
+    expect(written.accountEmail).toBeNull()
   })
 
   it('writes version 11', async () => {

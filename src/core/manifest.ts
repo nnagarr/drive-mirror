@@ -170,18 +170,28 @@ export function createManifestStore(dir: string): ManifestStore {
       // The file is read as it is. An older manifest keeps every mirror,
       // every file and every retired record it holds, and only gains the
       // fields this build knows and the file does not mention - the account
-      // above all. The version in the file is left alone: there is no
-      // migration step and no data is moved.
+      // above all. The version in the file is left alone here: there is no
+      // migration step and no data is moved. The write stamps the version
+      // this build writes.
       return { ...emptyManifest(), ...parsed }
     },
 
     async write(m: Manifest): Promise<void> {
-      const copy: Manifest = { ...m, updatedAt: new Date().toISOString() }
+      // The file carries the version of the schema it is written in. A
+      // manifest that was read from an older file is written back as the
+      // version this build writes; the mirrors, the files, the retired
+      // records and the counts in it are left exactly as they were.
+      const copy: Manifest = {
+        ...m,
+        version: MANIFEST_VERSION,
+        updatedAt: new Date().toISOString(),
+      }
       await writeAtomic(`${JSON.stringify(copy, null, 2)}\n`)
     },
 
     async checkpoint(m: Manifest): Promise<void> {
-      await writeAtomic(`${JSON.stringify(m, null, 2)}\n`)
+      const copy: Manifest = { ...m, version: MANIFEST_VERSION }
+      await writeAtomic(`${JSON.stringify(copy, null, 2)}\n`)
     },
 
     async appendJournal(op: JournalOp): Promise<void> {
