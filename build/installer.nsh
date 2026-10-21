@@ -1,4 +1,4 @@
-﻿; The Windows scheduled task is registered outside the app, so the app has to
+; The Windows scheduled task is registered outside the app, so the app has to
 ; take it away again when it is uninstalled. A task that is not there is
 ; not an error, so the exit code is ignored.
 !macro customUnInstall
