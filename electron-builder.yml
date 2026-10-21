@@ -19,6 +19,9 @@ win:
         - x64
   artifactName: Drive-Mirror-${version}-Setup.${ext}
   executableName: Drive Mirror
+  # The app's own icon. Without this, the installer ships with the default
+  # Electron logo.
+  icon: build/icon.ico
 
 nsis:
   oneClick: false
@@ -28,8 +31,15 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: Drive Mirror
   deleteAppDataOnUninstall: false
+  # The Windows scheduled task lives outside the app, so the uninstaller
+  # has to take it away.
+  include: build/installer.nsh
 
 # The manifest, the logs and the credentials are the user's own data.
 # They live outside the installation directory, so nothing is lost when the
 # app is replaced.
-extraResources: []
+#
+# The icon is shipped too, so the window can show it in the taskbar.
+extraResources:
+  - from: build/icon.png
+    to: icon.png

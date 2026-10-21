@@ -53,6 +53,8 @@ export interface DriveMirrorApi {
   ): Promise<{ ok: true; path: string } | { ok: false; message: string }>
   /** Open a link in the browser, never inside the app. */
   openExternal(url: string): Promise<void>
+  /** The app's icon, as a data the interface can show. */
+  appIcon(): Promise<string>
   onEvent(cb: (event: AppEvent) => void): () => void
 }
 
@@ -90,6 +92,7 @@ const api: DriveMirrorApi = {
   downloadRestored: (mirror: string, driveFileId: string) =>
     ipcRenderer.invoke('drive-mirror:download-restored', mirror, driveFileId),
   openExternal: (url: string) => ipcRenderer.invoke('drive-mirror:open-external', url),
+  appIcon: () => ipcRenderer.invoke('drive-mirror:app-icon'),
 
   onEvent(cb: (event: AppEvent) => void): () => void {
     const listener = (_event: unknown, payload: AppEvent): void => {

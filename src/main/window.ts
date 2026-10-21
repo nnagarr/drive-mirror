@@ -7,7 +7,7 @@
  * is in the preload script.
  */
 
-import { BrowserWindow, nativeTheme } from 'electron'
+import { app, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'node:path'
 
 /** Where the preload script lives, in development and in a build. */
@@ -20,6 +20,18 @@ function preloadPath(): string {
 /** The page the window shows. */
 function indexPath(): string {
   return join(__dirname, '../renderer/index.html')
+}
+
+/**
+ * The app's icon.
+ *
+ * In a build it is a resource next to the app. In development it is read
+ * from the repository, because the build has not been made yet.
+ */
+export function appIconPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(app.getAppPath(), 'build', 'icon.png')
 }
 
 /**
@@ -37,6 +49,7 @@ export function createMainWindow(): BrowserWindow {
     title: 'Drive Mirror',
     titleBarStyle: 'default',
     backgroundColor: '#1b1b1f',
+    icon: appIconPath(),
     webPreferences: {
       preload: preloadPath(),
       contextIsolation: true,

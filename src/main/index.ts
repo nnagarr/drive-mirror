@@ -20,7 +20,7 @@ import { mirrorConfigsFromManifest } from '../core/mirrorConfig'
 import { appDataDir, createCredentialStore, createSettingsStore } from './settings'
 import type { Settings } from './settings'
 import { registerIpc } from './ipc'
-import { createMainWindow } from './window'
+import { createMainWindow, appIconPath } from './window'
 import { createRunner } from './runner'
 import { createScheduler } from './scheduler'
 import { setPendingNotice } from './notice'
@@ -413,6 +413,16 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       async pruneSuperseded() {
         const current = await currentSettings()
         return pruneSuperseded(current.supersededPath)
+      },
+      async appIcon() {
+        // The interface shows the icon in the top bar. It is sent as a
+        // data URL, because the renderer cannot read a file of its own.
+        try {
+          const data = await readFile(appIconPath())
+          return `data:image/png;base64,${data.toString('base64')}`
+        } catch {
+          return ''
+        }
       },
       async chooseFolder() {
         const options = {

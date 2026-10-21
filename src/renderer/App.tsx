@@ -50,6 +50,8 @@ export function App(): JSX.Element {
     null,
   )
   const [wizardOpen, setWizardOpen] = useState(false)
+  /** The app's icon, shown next to the title. */
+  const [icon, setIcon] = useState('')
 
   const refresh = useCallback(async () => {
     try {
@@ -111,6 +113,7 @@ export function App(): JSX.Element {
     })
 
     void api.getState().then(setState).catch(() => setError('The app state could not be read.'))
+    void api.appIcon().then(setIcon).catch(() => undefined)
     void api
       .getSettings()
       .then((loaded) => {
@@ -215,6 +218,7 @@ export function App(): JSX.Element {
     <div className="app">
       <header className="topbar">
         <div className="topbar__brand">
+          {icon && <img className="topbar__icon" src={icon} alt="" />}
           <h1 className="topbar__title">Drive Mirror</h1>
           <span className="topbar__account">
             {state?.needsAuth

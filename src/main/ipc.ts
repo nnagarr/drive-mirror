@@ -84,6 +84,8 @@ export interface IpcDeps {
   showManifest(): Promise<void>
   revealSuperseded(): Promise<void>
   pruneSuperseded(): Promise<{ freedBytes: number }>
+  /** The app's icon, as a data the interface can show. */
+  appIcon(): Promise<string>
   /** Ask the user for a folder to mirror. */
   chooseFolder(): Promise<string | null>
   /** Forget the Google connection: the token, the client id and the secret. */
@@ -163,6 +165,8 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle('drive-mirror:prune-superseded', () => deps.pruneSuperseded())
 
   ipcMain.handle('drive-mirror:choose-folder', async () => deps.chooseFolder())
+
+  ipcMain.handle('drive-mirror:app-icon', async () => deps.appIcon())
 
   ipcMain.handle(
     'drive-mirror:add-mirror',

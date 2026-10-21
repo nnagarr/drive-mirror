@@ -747,3 +747,11 @@ body {
   margin: 0 0 0.5rem;
   color: var(--text-dim);
 }
+
+/* The app's own icon, next to the title. */
+.topbar__icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  flex: none;
+}
