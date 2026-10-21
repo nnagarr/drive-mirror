@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRunner } from '../src/main/runner'
@@ -57,6 +57,8 @@ async function harness(
       ...defaultSettings(),
       manifestPath: manifestFile,
       supersededPath: join(dir, 'superseded'),
+      // The backup copy stays inside the test's own directory.
+      backupPaths: [join(dir, 'backup')],
     },
     manifestFile,
   }
@@ -320,6 +322,16 @@ describe('the sync runner', () => {
     expect(card?.fileCount).toBe(2)
     // Nothing was written to Drive.
     expect(box.client.calls.some((c) => c.op === 'createFile')).toBe(false)
+  })
+
+  it('writes the backup copy inside the test directory', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+
+    await runner(box).syncNow()
+
+    const written = await readdir(join(box.dir, 'backup'))
+    expect(written).toContain('manifest.json')
   })
 })
 

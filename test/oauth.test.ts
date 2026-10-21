@@ -182,7 +182,8 @@ describe('the settings store', () => {
     expect(settings.guardThreshold).toBe(5)
     expect(settings.clientId).toBe('')
     expect(settings.clientSecretSet).toBe(false)
-    expect(settings.backupPath).toContain('.drive-mirror-backup')
+    expect(settings.backupPaths.length).toBeGreaterThan(0)
+    expect(settings.backupPaths.every((path) => typeof path === 'string')).toBe(true)
     expect(settings.manifestPath).toContain('manifest.json')
     expect(settings.supersededPath).toContain('superseded')
   })
@@ -197,6 +198,8 @@ describe('the settings store', () => {
 
     const read = await store.read()
     expect(read.guardThreshold).toBe(9)
-    expect(read.clientId).toBe('CID')
+    // The client id lives in the credential store. This file never holds it.
+    expect(read.clientId).toBe('')
+    expect(await readFile(file, 'utf8')).not.toContain('CID')
   })
 })

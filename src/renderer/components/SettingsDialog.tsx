@@ -138,7 +138,7 @@ export function SettingsDialog({ settings, onClose }: SettingsDialogProps): JSX.
             </div>
             <div>
               <dt>Backup</dt>
-              <dd>{settings.backupPath}</dd>
+              <dd>{settings.backupPaths.join(', ')}</dd>
             </div>
             <div>
               <dt>Superseded copies</dt>

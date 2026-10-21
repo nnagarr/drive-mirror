@@ -413,7 +413,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
 
       await deps.store.checkpoint(manifest)
-      await writeBackup(deps.settings.backupPath, manifest)
+      await writeBackup(deps.settings.backupPaths[0], manifest)
     },
 
     async syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }) {
@@ -454,7 +454,7 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       summary.finishedAt = new Date().toISOString()
       await deps.store.checkpoint(manifest)
-      await writeBackup(deps.settings.backupPath, manifest)
+      await writeBackup(deps.settings.backupPaths[0], manifest)
 
       running.value = false
       phase.value = 'idle'
@@ -489,7 +489,11 @@ export function createRunner(deps: RunnerDeps): Runner {
  * A failure here does not fail the run. The manifest was already written
  * where the app reads it.
  */
-async function writeBackup(backupPath: string, manifest: Manifest): Promise<void> {
+async function writeBackup(
+  backupPath: string | undefined,
+  manifest: Manifest,
+): Promise<void> {
+  if (!backupPath) return
   try {
     await mkdir(backupPath, { recursive: true })
     await writeFile(
