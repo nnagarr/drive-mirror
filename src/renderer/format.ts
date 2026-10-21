@@ -33,3 +33,32 @@ export function relativeTime(iso: string | null): string {
 export function count(value: number): string {
   return value.toLocaleString()
 }
+
+/** What a run did, as far as the summary bar cares. */
+export interface RunOutcome {
+  uploaded: number
+  updated: number
+  downloaded: number
+  trashed: number
+  errors: number
+  reports: readonly unknown[]
+}
+
+/**
+ * Whether a run has nothing to report.
+ *
+ * A run that changed nothing is quiet. A run that had something to say -
+ * even when it changed nothing - is not: it skipped a folder, or it did
+ * not run at all because another sync was going, and the user needs to
+ * know that rather than being told everything is up to date.
+ */
+export function summaryIsQuiet(summary: RunOutcome): boolean {
+  return (
+    summary.uploaded === 0 &&
+    summary.updated === 0 &&
+    summary.downloaded === 0 &&
+    summary.trashed === 0 &&
+    summary.errors === 0 &&
+    summary.reports.length === 0
+  )
+}

@@ -612,3 +612,23 @@ function isInside(
   if (!folder) return false
   return isInside(client, folder.parentId, ancestorId)
 }
+
+describe('the lock between runs', () => {
+  it('does not re-approve a drive while another sync holds the lock', async () => {
+    const box = await harness()
+    const r = runner(box)
+    await acquireSyncLock(box.lockPath, new Date())
+    await expect(r.rebase('Medicine')).rejects.toThrow(/another sync is running/i)
+    const manifest = await box.store.read()
+    expect(manifest.mirrors.Medicine).toBeUndefined()
+  })
+
+  it('says why a run was skipped when another sync holds the lock', async () => {
+    const box = await harness()
+    const r = runner(box)
+    await acquireSyncLock(box.lockPath, new Date())
+    const summary = await r.syncNow()
+    expect(summary.reports.length).toBeGreaterThan(0)
+    expect(summary.reports[0]!.message).toMatch(/another sync/i)
+  })
+})

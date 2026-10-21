@@ -437,8 +437,14 @@ export function createRunner(deps: RunnerDeps): Runner {
   ): Promise<RunSummary> {
     const locked = await acquireSyncLock(lockPath, new Date())
     if (!locked) {
-      note(deps.log, 'another sync was already running, so this run was skipped')
-      return emptySummary()
+      const message = 'another sync was already running, so this run was skipped'
+      note(deps.log, message)
+      const skipped = emptySummary()
+      // The run did nothing, but the user has to be told that. A summary
+      // with no numbers reads as "everything is up to date", which is the
+      // opposite of the truth.
+      skipped.reports.push({ code: 'anomaly', relPath: '', message })
+      return skipped
     }
 
     try {
@@ -529,32 +535,64 @@ export function createRunner(deps: RunnerDeps): Runner {
     },
 
     async rebase(mirrorName: string): Promise<void> {
-      const settings = await deps.settings()
-      const manifest = await deps.store.read()
-      const config = settings.mirrors.find((m) => m.name === mirrorName)
-      if (!config) return
-
-      const mirrorManifest = manifest.mirrors[mirrorName] ?? emptyMirror(config.root)
-
-      // The live entries describe the OLD volume. They become retired
-      // records, so the engine can later tell "the same file came back"
-      // from "a different file took its place".
-      manifest.mirrors[mirrorName] = rebaseMirror(mirrorManifest, new Date().toISOString())
-
-      // The new volume's serial is what is recorded from now on.
-      const driveLetter = driveLetterOf(config.root)
-      if (driveLetter) {
-        const dev = volumeDevOf(driveLetter)
-        if (dev !== null) {
-          manifest.volumes[driveLetter] = {
-            dev,
-            checkedAt: new Date().toISOString(),
-          }
-        }
+      // A re-approve must not interleave with a run. The run holds the
+      // manifest in memory and would write it back over this change, so
+      // the user's approval would be lost without a word. Wait for a run
+      // in this process, and take the lock for the rest.
+      if (inFlight) {
+        await inFlight.catch(() => undefined)
+      }
+      const locked = await acquireSyncLock(lockPath, new Date())
+      if (!locked) {
+        throw new Error(
+          'another sync is running, so the drive could not be re-approved yet',
+        )
       }
 
-      await deps.store.checkpoint(manifest)
-      await writeBackups(settings.backupPaths, manifest, deps.log)
+      try {
+        const settings = await deps.settings()
+        const manifest = await deps.store.read()
+        const config = settings.mirrors.find((m) => m.name === mirrorName)
+        if (!config) return
+
+        const mirrorManifest = manifest.mirrors[mirrorName] ?? emptyMirror(config.root)
+
+        // The live entries describe the OLD volume. They become retired
+        // records, so the engine can later tell "the same file came back"
+        // from "a different file took its place".
+        manifest.mirrors[mirrorName] = rebaseMirror(
+          mirrorManifest,
+          new Date().toISOString(),
+        )
+
+        // The new volume's serial is what is recorded from now on.
+        const driveLetter = driveLetterOf(config.root)
+        if (driveLetter) {
+          const dev = volumeDevOf(driveLetter)
+          if (dev !== null) {
+            manifest.volumes[driveLetter] = {
+              dev,
+              checkedAt: new Date().toISOString(),
+            }
+          }
+        }
+
+        await deps.store.checkpoint(manifest)
+        await writeBackups(settings.backupPaths, manifest, deps.log)
+      } finally {
+        try {
+          await releaseSyncLock(lockPath)
+        } catch (err) {
+          // A lock that cannot be removed is stale in six hours' time. It
+          // must not hide the error the re-approve failed with.
+          note(
+            deps.log,
+            `the sync lock could not be removed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          )
+        }
+      }
     },
 
     async syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }) {

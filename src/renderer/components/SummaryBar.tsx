@@ -1,5 +1,5 @@
 import type { JSX } from 'react'
-import { count } from '../format'
+import { count, summaryIsQuiet } from '../format'
 import type { RunSummary } from '../../main/ipc'
 
 export interface SummaryBarProps {
@@ -30,12 +30,7 @@ export function SummaryBar({
     )
   }
 
-  const nothing =
-    summary.uploaded === 0 &&
-    summary.updated === 0 &&
-    summary.downloaded === 0 &&
-    summary.trashed === 0 &&
-    summary.errors === 0
+  const nothing = summaryIsQuiet(summary)
 
   if (nothing) {
     return (
