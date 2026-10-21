@@ -23,7 +23,7 @@
 - The mirror list is configuration and lives in `settings.json`. The manifest is history and lives in `manifest.json`. Changing one never touches the other.
 - A mirror's `name` is the manifest key. Names are unique case-insensitively. The manifest is **not** re-keyed.
 - A removed mirror is forgotten entirely 30 days after removal, retired records included. This is the one carve-out from the base spec's never-prune rule.
-- New core modules import nothing from `electron` and nothing from `node:`.
+- New core modules import nothing from `electron`. A module whose only job is file I/O may import `node:fs`; every other core module imports nothing from `node:`.
 - Every task ends with a commit. Commits are small and each one leaves the tree green.
 
 ## Review Focus
@@ -598,14 +598,13 @@ This fixes **B1**: the test suite currently overwrites the real backup at `E:\.d
   ): Promise<{ written: string[]; failed: string[] }> {
     const written: string[] = []
     const failed: string[] = []
+    if (paths.length === 0) {
+      log?.('no backup copy is configured, so the manifest has no safety net')
+    }
     for (const path of paths) {
       try {
         await mkdir(path, { recursive: true })
-        await writeFile(
-          join(path, 'manifest.json'),
-          JSON.stringify(manifest, null, 2),
-          'utf8',
-        )
+        await writeAtomic(join(path, 'manifest.json'), serialiseManifest(manifest))
         written.push(path)
       } catch (err) {
         failed.push(path)
@@ -615,6 +614,12 @@ This fixes **B1**: the test suite currently overwrites the real backup at `E:\.d
     return { written, failed }
   }
   ```
+
+  **The backup write is atomic, and its bytes are the bytes the store writes.** The store already writes the manifest atomically (temp file + fsync + rename) so a crash never leaves a half-written manifest. The backup copy must do the same: `writeFile` truncates the target before writing, so a crash during a plain write would destroy the *previous good* copy — the act of refreshing the safety net would break it.
+
+  Extract the two pieces so the copy cannot drift from the original:
+  - `src/core/atomic.ts` — `writeAtomic(path: string, contents: string): Promise<void>`, moved out of `src/core/manifest.ts` and used by both.
+  - `serialiseManifest(manifest: Manifest): string` — the one place the version stamp and the JSON formatting live, so the backup carries `MANIFEST_VERSION` and ends with the same trailing newline as the manifest. A hand-diff of the backup against the primary should show no differences.
 
   The two call sites in `runner.ts` (lines 416 and 457) become `await writeBackups(deps.settings.backupPaths, manifest, ...)`. **Neither call site may throw.**
 
