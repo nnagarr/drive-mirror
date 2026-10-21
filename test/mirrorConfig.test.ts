@@ -56,6 +56,19 @@ describe('mirror configuration', () => {
     expect(isValidDrivePath('../Photos')).toBe(false)
   })
 
+  it('refuses a Drive path segment that is too long for Drive', () => {
+    expect(isValidDrivePath('a'.repeat(255))).toBe(true)
+    expect(isValidDrivePath('a'.repeat(256))).toBe(false)
+    expect(isValidDrivePath(`Archive/${'a'.repeat(256)}`)).toBe(false)
+  })
+
+  it('refuses a Drive path segment that ends in a space or a dot', () => {
+    expect(isValidDrivePath('Photos ')).toBe(false)
+    expect(isValidDrivePath('Photos.')).toBe(false)
+    expect(isValidDrivePath('Archive/Photos.')).toBe(false)
+    expect(isValidDrivePath('Docs.2026')).toBe(true)
+  })
+
   it('refuses a name with a character Windows cannot use in a folder name', () => {
     expect(isValidMirrorName('My Photos')).toBe(true)
     expect(isValidMirrorName('a/b')).toBe(false)
@@ -80,6 +93,9 @@ describe('mirror configuration', () => {
     expect(suggestDrivePath('a\\b')).toBe('a-b')
     expect(isValidDrivePath(suggestDrivePath('a\\b'))).toBe(true)
     expect(isValidDrivePath(suggestDrivePath('Docs: Photos'))).toBe(true)
+    expect(isValidDrivePath(suggestDrivePath('Photos '))).toBe(true)
+    expect(isValidDrivePath(suggestDrivePath('Photos.'))).toBe(true)
+    expect(isValidDrivePath(suggestDrivePath('a'.repeat(300)))).toBe(true)
   })
 
   it('refuses a candidate whose root is not a folder on this computer', () => {

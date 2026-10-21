@@ -49,6 +49,9 @@ const ILLEGAL_SEGMENT_CHARS = /[<>:"|?*]/
 /** Control characters, which Windows forbids in a name. */
 const CONTROL_CHARS = /[\u0000-\u001f]/
 
+/** The most characters a Drive path segment may hold. */
+const MAX_SEGMENT_LENGTH = 255
+
 /** A root is a drive letter, a colon and a separator. */
 const DRIVE_ROOT = /^[A-Za-z]:[\\/]/
 
@@ -77,19 +80,22 @@ export function isValidMirrorName(name: string): boolean {
  * True when `drivePath` is a folder path under My Drive.
  *
  * The path is relative to My Drive and its segments are separated by `/`.
- * Every segment must be a name Drive can hold, so no segment is empty, no
- * segment is `.` or `..`, and no segment carries a character Windows
- * forbids - a Drive folder the app could not create on this machine would
- * be a folder the user could not open either.
+ * Every segment follows Drive's rules (spec §12 A14): it is not empty, it
+ * is not `.` or `..`, it holds no `/` or `\` and no control character, it
+ * is at most 255 characters long, and it does not end in a space or a
+ * dot. A segment that breaks a rule is a folder the app could not create
+ * on Drive, so the mirror is refused before it is configured.
  */
 export function isValidDrivePath(drivePath: string): boolean {
   if (drivePath.length === 0) return false
   for (const segment of drivePath.split('/')) {
     if (segment.length === 0) return false
+    if (segment.length > MAX_SEGMENT_LENGTH) return false
     if (segment === '.' || segment === '..') return false
     if (segment.includes('\\')) return false
     if (ILLEGAL_SEGMENT_CHARS.test(segment)) return false
     if (CONTROL_CHARS.test(segment)) return false
+    if (segment.endsWith(' ') || segment.endsWith('.')) return false
   }
   return true
 }
@@ -115,8 +121,11 @@ export function overlaps(rootA: string, rootB: string): boolean {
  * name, a root that is not a folder on this machine, a Drive path that is
  * not a path - and against the mirrors that exist already: the name must
  * be free, and the root must not overlap a root that is already mirrored.
- * A candidate that breaks two rules gets both problems, so the user is
- * told everything at once.
+ * The checks on the candidate itself are apart, so a candidate that is
+ * wrong in two ways is told about both. Against one mirror, though, a
+ * name that is taken is reported on its own: the name problem already
+ * says everything the user needs, so the overlap check is skipped for
+ * that mirror.
  *
  * A mirror the user removed keeps its name and its folder. The same name
  * on the same folder puts it back and re-adopts the history the manifest
@@ -182,13 +191,18 @@ export function validateMirror(
  *
  * The name is the suggestion, and a name that carries a character a Drive
  * folder cannot hold cannot be part of a Drive path either, so those
- * characters become `-` - the same characters the checks above reject.
- * The result is a path `isValidDrivePath` accepts.
+ * characters become `-`. The suggestion is shortened to what Drive can
+ * hold and stripped of the trailing space or dot Drive would not keep, so
+ * it is a path `isValidDrivePath` accepts.
+ *
+ * The one name with nothing to suggest is one that is nothing but `.`,
+ * `..` or spaces: it reduces to nothing, and `isValidMirrorName` refuses
+ * such a name anyway.
  */
 export function suggestDrivePath(name: string): string {
   return name
     .split('/')
-    .map((segment) => segment.replace(/[<>:"\\|?*]/g, '-').replace(/[\u0000-\u001f]/g, '-').trim())
+    .map((segment) => driveSegment(segment))
     .filter((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
     .join('/')
 }
@@ -214,6 +228,16 @@ export function mirrorConfigsFromManifest(manifest: Manifest): MirrorConfig[] {
     })
   }
   return configs
+}
+
+/** A Drive folder name: the characters Drive can hold, and no longer than Drive allows. */
+function driveSegment(segment: string): string {
+  const cleaned = segment
+    .replace(/[<>:"\\|?*]/g, '-')
+    .replace(/[\u0000-\u001f]/g, '-')
+    .trim()
+  const shortened = cleaned.length > MAX_SEGMENT_LENGTH ? cleaned.slice(0, MAX_SEGMENT_LENGTH) : cleaned
+  return shortened.replace(/[ .]+$/, '')
 }
 
 /** A root in a form two roots can be compared in. */
