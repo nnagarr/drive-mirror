@@ -3,7 +3,7 @@
  * manifest) into a plan of actions.
  *
  * The engine is pure with respect to the outside world. Every read it needs
- * — a file's hash, a Drive file's current state, a native export's bytes —
+ * â€” a file's hash, a Drive file's current state, a native export's bytes â€”
  * arrives through the injected `DiffIo` port, so the whole engine is testable
  * without a disk or a network.
  *
@@ -106,6 +106,59 @@ function notImplemented(step: string): never {
 }
 
 /**
+ * The dispatch step that handles a path, for the exhaustiveness test.
+ *
+ * The dispatch and this function must agree: `diffMirror` decides, and
+ * `matchRule` reports the same decision without performing any I/O. The
+ * exhaustiveness test compares the two, so a dispatch step that drifts from
+ * its table shows up as a failing test.
+ */
+export function matchRule(input: DiffInput, path: string): string[] {
+  const { local, drive, manifest } = input
+  const { retiredById } = buildIndexes(manifest)
+  const exportPlan = planExportPaths(drive, manifest, local)
+  const { claimedBy, retiredClaims } = buildClaimIndex(manifest, exportPlan, drive)
+
+  const localEntry = local.files.get(path)
+  const driveEntries = drive.files.get(path)
+  const manifestEntry = manifest.files[path]
+  const usableDrive = driveEntries && driveEntries.length === 1 ? driveEntries[0] : undefined
+  const rec = usableDrive ? retiredById.get(usableDrive.id) : undefined
+
+  if (driveEntries) {
+    if (driveEntries.length > 1) return ['P1']
+    const only = driveEntries[0]!
+    if (only.ambiguous) return ['P1']
+    if (only.unrepresentable) return ['P1']
+  }
+
+  if (localEntry) {
+    if (claimedBy.has(path)) return ['P2']
+    if (retiredClaims.has(path)) return ['P2']
+  }
+
+  if (localEntry && localEntry.state === 'unknown') return ['P3']
+
+  const liveIsTracked = !manifestEntry || manifestEntry.driveFileId === usableDrive?.id
+  if (usableDrive && rec && rec.state !== 'resynced' && liveIsTracked) return ['P4']
+
+  if (usableDrive && isGoogleNativeMime(usableDrive.mimeType)) return ['P5']
+
+  if (manifestEntry && isGoogleNativeMime(manifestEntry.driveMimeType) && !usableDrive) {
+    return ['P6']
+  }
+
+  if (manifestEntry) return ['P7']
+
+  if (usableDrive) return ['P8']
+
+  const retiredHere = Object.values(manifest.retired).filter((r) => canon(r.path) === path)
+  if (retiredHere.length > 0) return ['P9']
+
+  return ['P10']
+}
+
+/**
  * Compute the plan for one mirror.
  */
 export async function diffMirror(input: DiffInput): Promise<SyncPlan> {
@@ -184,18 +237,44 @@ export async function diffMirror(input: DiffInput): Promise<SyncPlan> {
       }
     }
 
+    const usableDrive = driveEntries && driveEntries.length === 1 ? driveEntries[0] : undefined
+
     // --- P3: the local path is unreadable ----------------------------
     if (localEntry && localEntry.state === 'unknown') {
       // An unreadable path is not a deleted path. Nothing may be trashed
-      // because of it.
+      // because of it, and nothing may be uploaded over it either. The
+      // Drive file is still recorded, so it is not lost from the mirror.
+      if (usableDrive) {
+        const op: ManifestOp = {
+          op: 'set-file',
+          path,
+          entry: {
+            displayPath: path,
+            driveFileId: usableDrive.id,
+            driveMd5: usableDrive.md5 ?? null,
+            driveModifiedTime: usableDrive.driveModifiedTime,
+            driveMimeType: usableDrive.mimeType,
+            exportMime: null,
+            localPath: path,
+            localMd5: null,
+            localSize: 0,
+            localMtimeMs: 0,
+          },
+        }
+        steps.push({ action: null, ops: [op] })
+      }
       continue
     }
 
-    const usableDrive = driveEntries && driveEntries.length === 1 ? driveEntries[0] : undefined
     const rec = usableDrive ? retiredById.get(usableDrive.id) : undefined
 
     // --- P4: the Drive file is a known, retired id -------------------
-    if (usableDrive && rec && rec.state !== 'resynced') {
+    // Only when the live file is the one the manifest tracks, or when the
+    // manifest does not track this path at all. If the manifest tracks a
+    // DIFFERENT file here, the live file is new at this path and belongs
+    // to the ordinary rules.
+    const liveIsTracked = !manifestEntry || manifestEntry.driveFileId === usableDrive?.id
+    if (usableDrive && rec && rec.state !== 'resynced' && liveIsTracked) {
       const result = await groupR(input, path, localEntry, usableDrive, rec)
       if (result?.step) {
         steps.push(result.step)
@@ -288,7 +367,7 @@ export async function diffMirror(input: DiffInput): Promise<SyncPlan> {
 }
 
 /**
- * Group B — the path has a live manifest entry.
+ * Group B â€” the path has a live manifest entry.
  *
  * This group contains the app's only trash action (B0). Everything else here
  * moves content around or records that nothing needs doing.
@@ -313,9 +392,35 @@ async function groupB(
     // it: writing a `trashed` record for a file that is alive on Drive would
     // make the next run report it as a user restore.
     if (mergeOnly) {
-      return null
+      // The trash is skipped, but the file is still tracked: it is on
+      // Drive, and dropping it from the manifest would lose it from the
+      // mirror. The live entry is refreshed from what Drive holds.
+      return {
+        step: {
+          action: null,
+          ops: [
+            {
+              op: 'set-file',
+              path,
+              entry: {
+                displayPath: path,
+                driveFileId: driveFile.id,
+                driveMd5: driveFile.md5 ?? null,
+                driveModifiedTime: driveFile.driveModifiedTime,
+                driveMimeType: driveFile.mimeType,
+                exportMime: null,
+                localPath: manifestEntry.localPath,
+                localMd5: null,
+                localSize: 0,
+                localMtimeMs: 0,
+              },
+            },
+          ],
+        },
+      }
     }
     const record: RetiredRecord = {
+      id: driveFile.id,
       path,
       state: 'trashed',
       at: new Date().toISOString(),
@@ -469,6 +574,7 @@ async function groupB(
     const probe = await io.probe(manifestEntry.driveFileId)
     const state = retiredStateFor(probe)
     const record: RetiredRecord = {
+      id: manifestEntry.driveFileId,
       path,
       state,
       at: new Date().toISOString(),
@@ -515,6 +621,37 @@ async function groupB(
 
     // The tracked file moved or was trashed elsewhere. The file now at this
     // path is a different one; treat it as new-on-Drive.
+    //
+    // When there is no local file, the new Drive file is simply adopted:
+    // it is the only copy of that content, and leaving it untracked would
+    // drop it from the mirror.
+    if (!localPresent) {
+      return {
+        step: {
+          action: null,
+          ops: [
+            { op: 'set-retired', id: manifestEntry.driveFileId, record },
+            {
+              op: 'set-file',
+              path,
+              entry: {
+                displayPath: path,
+                driveFileId: driveFile.id,
+                driveMd5: driveFile.md5 ?? null,
+                driveModifiedTime: driveFile.driveModifiedTime,
+                driveMimeType: driveFile.mimeType,
+                exportMime: null,
+                localPath: path,
+                localMd5: null,
+                localSize: 0,
+                localMtimeMs: 0,
+              },
+            },
+          ],
+        },
+      }
+    }
+
     return {
       step: {
         action: null,
@@ -531,6 +668,7 @@ async function groupB(
       // Somebody else trashed it. The app must not undo that, and must not
       // re-upload over it either.
       const record: RetiredRecord = {
+        id: manifestEntry.driveFileId,
         path,
         state: 'trashed-externally',
         at: new Date().toISOString(),
@@ -591,6 +729,7 @@ async function groupB(
     // The tracked Drive file is gone for good. Upload the local file again.
     const localMd5 = await io.md5Of(path)
     const record: RetiredRecord = {
+      id: manifestEntry.driveFileId,
       path,
       state: 'gone',
       at: new Date().toISOString(),
@@ -634,6 +773,7 @@ async function groupB(
   // --- B4: the file is gone from both sides ------------------------
   if (!driveFile && localAbsent) {
     const record: RetiredRecord = {
+      id: manifestEntry.driveFileId,
       path,
       state: 'gone',
       at: new Date().toISOString(),
@@ -692,7 +832,7 @@ function compareContent(
 }
 
 /**
- * Group D — a retired record at this path, with no Drive file present.
+ * Group D â€” a retired record at this path, with no Drive file present.
  *
  * This is the group that handles the user re-creating a file they had
  * deleted: the Drive copy is either still in Trash (restore it) or gone
@@ -708,7 +848,7 @@ async function groupD(
   const { io, mergeOnly } = input
   const localPresent = localEntry?.state === 'present'
 
-  // D5 — nothing local. The retired record stays as it is.
+  // D5 â€” nothing local. The retired record stays as it is.
   if (!localPresent) return null
 
   const localMd5 = await io.md5Of(path)
@@ -746,7 +886,7 @@ async function groupD(
     },
   })
 
-  // D2 — somebody else trashed it. The app must not undo that, and must
+  // D2 â€” somebody else trashed it. The app must not undo that, and must
   // not re-upload over it either: the user's deletion stands.
   if (record.state === 'trashed-externally') {
     return {
@@ -763,12 +903,12 @@ async function groupD(
     }
   }
 
-  // D3 / D4 — the Drive file is gone for good. Upload the local one.
+  // D3 / D4 â€” the Drive file is gone for good. Upload the local one.
   if (record.state === 'gone' || record.state === 'purged' || record.state === 'rebased') {
     return uploadNew(record.state === 'purged' ? 'purged' : 'gone', recordId)
   }
 
-  // D1 — the Drive copy is still in Trash. The user has re-created the file
+  // D1 â€” the Drive copy is still in Trash. The user has re-created the file
   // locally, so restore the Drive copy and give it the new content.
   if (record.state === 'trashed') {
     // A rebase must not perform destructive actions; restoring a file from
@@ -833,7 +973,7 @@ async function groupD(
             {
               op: 'set-retired',
               id: recordId,
-              record: { ...record, state: 'resynced', at: new Date().toISOString() },
+              record: { ...record, id: recordId, state: 'resynced', at: new Date().toISOString() },
             },
           ],
         },
@@ -878,7 +1018,7 @@ async function groupD(
           {
             op: 'set-retired',
             id: recordId,
-            record: { ...record, state: 'resynced', at: new Date().toISOString() },
+            record: { ...record, id: recordId, state: 'resynced', at: new Date().toISOString() },
           },
         ],
       },
@@ -890,7 +1030,7 @@ async function groupD(
 }
 
 /**
- * Group R — the Drive file is a known, retired id.
+ * Group R â€” the Drive file is a known, retired id.
  *
  * This is the group that decides whether a file the user deleted comes back.
  * The answer is usually no: the user deleting a file locally and the app
@@ -918,13 +1058,13 @@ async function groupR(
   const release = (state: RetiredState): ManifestOp => ({
     op: 'set-retired',
     id: driveFile.id,
-    record: { ...record, state, at: new Date().toISOString() },
+    record: { ...record, id: driveFile.id, state, at: new Date().toISOString() },
   })
 
   // --- R1: the user deleted it locally, and it is back --------------
   if (record.state === 'trashed' || record.state === 'trashed-externally') {
     if (localAbsent) {
-      // The file is on Drive and not on disk. The user restored it — or
+      // The file is on Drive and not on disk. The user restored it â€” or
       // somebody else did. Either way the app does not re-download it: the
       // user's deletion stands until they say otherwise.
       return {
@@ -973,7 +1113,35 @@ async function groupR(
         },
       }
     }
-    return null
+    // The file is on Drive and the manifest still tracks it. The record is
+    // released so the path is governed by the ordinary rules again, and
+    // the live entry is restored: the file is neither downloaded nor
+    // trashed, but it is tracked, so the next run compares it like any
+    // other file.
+    return {
+      step: {
+        action: null,
+        ops: [
+          {
+            op: 'set-file',
+            path,
+            entry: {
+              displayPath: path,
+              driveFileId: driveFile.id,
+              driveMd5: driveFile.md5 ?? null,
+              driveModifiedTime: driveFile.driveModifiedTime,
+              driveMimeType: driveFile.mimeType,
+              exportMime: null,
+              localPath: path,
+              localMd5: null,
+              localSize: 0,
+              localMtimeMs: 0,
+            },
+          },
+          release('resynced'),
+        ],
+      },
+    }
   }
 
   // --- R4: gone or purged, yet the file exists ----------------------
@@ -1202,13 +1370,16 @@ async function groupR(
 }
 
 /**
- * Group N — Google-native files.
+ * Group N â€” Google-native files.
  *
  * A Google-native file is never uploaded over and never trashed. Its local
  * counterpart is a *derived artifact*: an export that the app can recreate
  * at any time from the document on Drive. When the export is missing the app
  * regenerates it; when the document changes the app re-exports it.
  */
+/** The mime type used for an ordinary binary file. */
+const BINARY_MIME = 'application/octet-stream'
+
 async function groupN(
   input: DiffInput,
   path: string,
@@ -1219,7 +1390,7 @@ async function groupN(
 ): Promise<GroupResult | null> {
   const { io } = input
 
-  // N11 — a native type with no export. There is nothing to back up.
+  // N11 â€” a native type with no export. There is nothing to back up.
   if (driveFile) {
     const info = exportInfoFor(driveFile.mimeType)
     if (!info) {
@@ -1324,6 +1495,7 @@ async function groupN(
       op: 'set-retired',
       id: manifestEntry.driveFileId,
       record: {
+        id: manifestEntry.driveFileId,
         path: manifestEntry.displayPath,
         state,
         at: new Date().toISOString(),
@@ -1405,7 +1577,7 @@ async function groupN(
       }
     }
 
-    // N4 — unchanged document, but the export on disk differs from what a
+    // N4 â€” unchanged document, but the export on disk differs from what a
     // fresh export would produce: the user edited it. Leave it alone and
     // say so rather than overwriting their work.
     return {
@@ -1427,33 +1599,70 @@ async function groupN(
     const probe = await io.probe(manifestEntry.driveFileId)
 
     if (probe.status === 'missing') {
-      // N6 — deleted on Drive. Retire it; the local export stays put and
-      // becomes an ordinary local file.
+      // N6 - deleted on Drive. Retire the native file. Its export, at
+      // `localPath`, becomes an ordinary local file and is uploaded by the
+      // ordinary rules; the local file at THIS path, if any, is a separate
+      // file and is uploaded too.
+      const retireOp: ManifestOp = {
+        op: 'set-retired',
+        id: manifestEntry.driveFileId,
+        record: {
+          id: manifestEntry.driveFileId,
+          path: manifestEntry.displayPath,
+          state: 'gone',
+          at: new Date().toISOString(),
+          md5: manifestEntry.driveMd5,
+          driveMimeType: manifestEntry.driveMimeType,
+          localPath: manifestEntry.localPath,
+          prevLocalMd5: manifestEntry.localMd5,
+        },
+      }
+
+      const localAtPath = localEntry?.state === 'present' ? localEntry : undefined
+      if (!localAtPath) {
+        return {
+          step: {
+            action: null,
+            ops: [retireOp, { op: 'del-file', path }],
+          },
+        }
+      }
+
+      const localMd5 = await io.md5Of(path)
       return {
         step: {
-          action: null,
+          action: {
+            kind: 'upload',
+            relPath: path,
+            localPath: path,
+            md5: localMd5 ?? '',
+            size: localAtPath.size ?? 0,
+          },
           ops: [
+            retireOp,
             {
-              op: 'set-retired',
-              id: manifestEntry.driveFileId,
-              record: {
-                path: manifestEntry.displayPath,
-                state: 'gone',
-                at: new Date().toISOString(),
-                md5: manifestEntry.driveMd5,
-                driveMimeType: manifestEntry.driveMimeType,
-                localPath: manifestEntry.localPath,
-                prevLocalMd5: manifestEntry.localMd5,
+              op: 'set-file',
+              path,
+              entry: {
+                displayPath: path,
+                driveFileId: '',
+                driveMd5: null,
+                driveModifiedTime: '',
+                driveMimeType: BINARY_MIME,
+                exportMime: null,
+                localPath: path,
+                localMd5,
+                localSize: localAtPath.size ?? 0,
+                localMtimeMs: localAtPath.mtimeMs ?? 0,
               },
             },
-            { op: 'del-file', path },
           ],
         },
       }
     }
 
     if (probe.status === 'trashed') {
-      // N7 — somebody else trashed it. Never restore it, never re-upload.
+      // N7 â€” somebody else trashed it. Never restore it, never re-upload.
       return {
         step: {
           action: null,
@@ -1468,6 +1677,7 @@ async function groupN(
               op: 'set-retired',
               id: manifestEntry.driveFileId,
               record: {
+                id: manifestEntry.driveFileId,
                 path: manifestEntry.displayPath,
                 state: 'trashed-externally',
                 at: new Date().toISOString(),
@@ -1484,7 +1694,7 @@ async function groupN(
     }
 
     if (probe.currentPath === path) {
-      // N8 — the listing simply missed it. Re-adopt it.
+      // N8 â€” the listing simply missed it. Re-adopt it.
       return {
         step: {
           action: null,
@@ -1499,7 +1709,7 @@ async function groupN(
       }
     }
 
-    // N9 — it was moved on Drive. Retire it here; it is picked up at its
+    // N9 â€” it was moved on Drive. Retire it here; it is picked up at its
     // new path as a first sight.
     return {
       step: {
@@ -1509,6 +1719,7 @@ async function groupN(
             op: 'set-retired',
             id: manifestEntry.driveFileId,
             record: {
+              id: manifestEntry.driveFileId,
               path: manifestEntry.displayPath,
               state: 'moved',
               at: new Date().toISOString(),
@@ -1536,7 +1747,7 @@ interface GroupResult {
 }
 
 /**
- * Group C — a Drive file the app has never tracked.
+ * Group C â€” a Drive file the app has never tracked.
  */
 async function groupC(
   input: DiffInput,
@@ -1546,7 +1757,7 @@ async function groupC(
 ): Promise<GroupResult | null> {
   const { io } = input
 
-  // C1 — the file exists only on Drive. Download it; the Drive copy stays.
+  // C1 â€” the file exists only on Drive. Download it; the Drive copy stays.
   if (!localEntry || localEntry.state === 'absent') {
     const entry = liveEntryFor(path, driveFile, path, null, 0, 0)
     return {
@@ -1568,7 +1779,7 @@ async function groupC(
   const driveMd5 = driveFile.md5 ?? null
 
   if (localMd5 !== null && driveMd5 !== null && localMd5 === driveMd5) {
-    // C2 — identical. Record it; transfer nothing.
+    // C2 â€” identical. Record it; transfer nothing.
     const entry = liveEntryFor(path, driveFile, path, localMd5, localEntry.size ?? 0, localEntry.mtimeMs ?? 0)
     return {
       step: {
@@ -1591,7 +1802,7 @@ async function groupC(
     }
   }
 
-  // C3 — the content differs. The local side wins.
+  // C3 â€” the content differs. The local side wins.
   const md5 = localMd5 ?? ''
   const size = localEntry.size ?? 0
   const entry = liveEntryFor(path, driveFile, path, md5, size, localEntry.mtimeMs ?? 0)
@@ -1611,7 +1822,7 @@ async function groupC(
 }
 
 /**
- * Group E — a local file the app has never tracked.
+ * Group E â€” a local file the app has never tracked.
  */
 async function groupE(
   input: DiffInput,

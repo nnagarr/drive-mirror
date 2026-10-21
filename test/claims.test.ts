@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { planExportPaths, buildClaimIndex } from '../src/core/claims'
+import { retired } from './helpers/fixtures'
 import { canon } from '../src/core/paths'
 import { emptyManifest, emptyMirror } from '../src/core/manifest'
 import type {
@@ -193,7 +194,7 @@ describe('buildClaimIndex', () => {
       },
     })
     const { claimedBy } = buildClaimIndex(mirror, new Map())
-    // An ordinary mirrored file is not a claim on its own path — the engine
+    // An ordinary mirrored file is not a claim on its own path Ã¢â‚¬â€ the engine
     // would otherwise skip every file it tracks.
     expect(claimedBy.has('renders/scene.psd')).toBe(false)
   })
@@ -232,14 +233,7 @@ describe('buildClaimIndex', () => {
     const mirror = mirrorWith(
       {},
       {
-        '1XyZ': {
-          path: 'budget',
-          state: 'gone',
-          at: '2026-10-20T00:00:00.000Z',
-          md5: 'm1',
-          driveMimeType: SHEET_MIME,
-          localPath: 'budget.csv',
-        },
+        '1XyZ': retired('1XyZ', 'budget', 'gone', { md5: 'm1', driveMimeType: SHEET_MIME, localPath: 'budget.csv' }),
       },
     )
     const { retiredClaims } = buildClaimIndex(mirror, new Map())
@@ -250,14 +244,7 @@ describe('buildClaimIndex', () => {
     const mirror = mirrorWith(
       {},
       {
-        '1XyZ': {
-          path: 'scene.psd',
-          state: 'gone',
-          at: '2026-10-20T00:00:00.000Z',
-          md5: 'm1',
-          driveMimeType: 'application/octet-stream',
-          localPath: null,
-        },
+        '1XyZ': retired('1XyZ', 'scene.psd', 'gone', { md5: 'm1' }),
       },
     )
     const { retiredClaims } = buildClaimIndex(mirror, new Map())

@@ -44,6 +44,7 @@ function retiredRecord(
   at: string,
 ): RetiredRecord {
   return {
+    id,
     path,
     state,
     at,

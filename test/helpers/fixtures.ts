@@ -19,6 +19,7 @@ import type {
   ManifestOp,
   MirrorManifest,
   ProbeResult,
+  RetiredRecord,
 } from '../../src/core/types'
 
 /** A local file described by its path, state and content hash. */
@@ -187,6 +188,28 @@ export function diffIo(overrides: Partial<DiffIo> = {}, local?: LocalTree): Diff
     readLocalBytes: async () => null,
     exportNative: async () => null,
     ...overrides,
+  }
+}
+
+/**
+ * Build a retired record. The `id` is the key it is stored under, so it is
+ * filled in here rather than repeated at every call site.
+ */
+export function retired(
+  id: string,
+  path: string,
+  state: RetiredRecord['state'],
+  extra: Partial<RetiredRecord> = {},
+): RetiredRecord {
+  return {
+    id,
+    path,
+    state,
+    at: '2026-10-20T00:00:00.000Z',
+    md5: 'm0',
+    driveMimeType: 'application/octet-stream',
+    localPath: null,
+    ...extra,
   }
 }
 

@@ -106,6 +106,9 @@ export type RetiredState =
 
 /** A Drive file the app has stopped tracking. Never pruned. */
 export interface RetiredRecord {
+  /** The Drive file id. It is the key of the `retired` map, and the id of
+   *  the file this record describes. */
+  id: string
   /** The path the id occupied when it was retired. */
   path: string
   state: RetiredState

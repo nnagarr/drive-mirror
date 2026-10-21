@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { diffMirror } from '../src/core/diff'
-import { localTree, driveTree, mirrorManifest, diffIo } from './helpers/fixtures'
+import { localTree, driveTree, mirrorManifest, diffIo, retired } from './helpers/fixtures'
 import type { DiffInput, SyncPlan } from '../src/core/diff'
 import type { DiffIo, SyncAction } from '../src/core/diff'
 import type { RetiredRecord, RetiredState } from '../src/core/types'
@@ -126,14 +126,7 @@ describe('diffMirror --- group E (local-only)', () => {
       manifest: mirrorManifest(
         {},
         {
-          'DOLD': {
-            path: 'other.psd',
-            state: 'trashed',
-            at: '2026-10-20T00:00:00.000Z',
-            md5: 'm0',
-            driveMimeType: 'application/octet-stream',
-            localPath: null,
-          },
+          'DOLD': retired('DOLD', 'other.psd', 'trashed'),
         },
       ),
     })
@@ -323,14 +316,7 @@ describe('diffMirror --- group B (live manifest entry)', () => {
 
 describe('diffMirror --- group D (retired path)', () => {
   const retiredTrashed = {
-    D1: {
-      path: 'a.psd',
-      state: 'trashed' as const,
-      at: '2026-10-20T00:00:00.000Z',
-      md5: 'm0',
-      driveMimeType: 'application/octet-stream',
-      localPath: null,
-    },
+    D1: retired('D1', 'a.psd', 'trashed'),
   }
 
   it('restores a trashed Drive file and replaces its content (D1)', async () => {
@@ -418,14 +404,7 @@ describe('diffMirror --- group D (retired path)', () => {
       manifest: mirrorManifest(
         {},
         {
-          D1: {
-            path: 'a.psd',
-            state: 'trashed-externally',
-            at: '2026-10-20T00:00:00.000Z',
-            md5: 'm0',
-            driveMimeType: 'application/octet-stream',
-            localPath: null,
-          },
+          D1: retired('D1', 'a.psd', 'trashed-externally'),
         },
       ),
     })
@@ -441,14 +420,7 @@ describe('diffMirror --- group D (retired path)', () => {
       manifest: mirrorManifest(
         {},
         {
-          D1: {
-            path: 'a.psd',
-            state: 'gone',
-            at: '2026-10-20T00:00:00.000Z',
-            md5: 'm0',
-            driveMimeType: 'application/octet-stream',
-            localPath: null,
-          },
+          D1: retired('D1', 'a.psd', 'gone'),
         },
       ),
     })
@@ -463,15 +435,7 @@ describe('diffMirror --- group D (retired path)', () => {
       manifest: mirrorManifest(
         {},
         {
-          D1: {
-            path: 'a.psd',
-            state: 'rebased',
-            at: '2026-10-20T00:00:00.000Z',
-            md5: 'm0',
-            driveMimeType: 'application/octet-stream',
-            localPath: null,
-            prevLocalMd5: 'm0',
-          },
+          D1: retired('D1', 'a.psd', 'rebased', { prevLocalMd5: 'm0' }),
         },
       ),
     })
@@ -491,23 +455,15 @@ describe('diffMirror --- group D (retired path)', () => {
 })
 
 describe('diffMirror --- group R (retired id)', () => {
-  const retired = (state: RetiredState, extra: Partial<RetiredRecord> = {}) => ({
-    D1: {
-      path: 'a.psd',
-      state,
-      at: '2026-10-20T00:00:00.000Z',
-      md5: 'm1',
-      driveMimeType: 'application/octet-stream',
-      localPath: null,
-      ...extra,
-    },
+  const retiredFor = (state: RetiredState, extra: Partial<RetiredRecord> = {}) => ({
+    D1: retired('D1', 'a.psd', state, extra),
   })
 
   it('does not download a file restored from Drive Trash (R1)', async () => {
     const p = await plan({
       local: localTree({ 'a.psd': 'absent' }),
       drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
-      manifest: mirrorManifest({}, retired('trashed')),
+      manifest: mirrorManifest({}, retiredFor('trashed')),
     })
 
     expect(kinds(p)).not.toContain('download')
@@ -523,7 +479,7 @@ describe('diffMirror --- group R (retired id)', () => {
     const p = await plan({
       local: localTree({ 'a.psd': 'absent' }),
       drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
-      manifest: mirrorManifest({}, retired('restored')),
+      manifest: mirrorManifest({}, retiredFor('restored')),
     })
 
     expect(kinds(p)).toEqual([])
@@ -534,7 +490,7 @@ describe('diffMirror --- group R (retired id)', () => {
     const p = await plan({
       local: localTree({ 'a.psd': { md5: 'm2' } }),
       drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
-      manifest: mirrorManifest({}, retired('restored')),
+      manifest: mirrorManifest({}, retiredFor('restored')),
     })
 
     expect(kinds(p)).toEqual([])
@@ -545,7 +501,7 @@ describe('diffMirror --- group R (retired id)', () => {
     const p = await plan({
       local: localTree({ 'a.psd': 'absent' }),
       drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
-      manifest: mirrorManifest({}, retired('gone')),
+      manifest: mirrorManifest({}, retiredFor('gone')),
     })
 
     expect(kinds(p)).toEqual([])
@@ -556,7 +512,7 @@ describe('diffMirror --- group R (retired id)', () => {
     const p = await plan({
       local: localTree({ 'a.psd': 'absent' }),
       drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
-      manifest: mirrorManifest({}, retired('moved')),
+      manifest: mirrorManifest({}, retiredFor('moved')),
     })
 
     expect(kinds(p)).toEqual(['download'])
@@ -571,7 +527,7 @@ describe('diffMirror --- group R (retired id)', () => {
     const p = await plan({
       local: localTree({ 'a.psd': { md5: 'm2' } }),
       drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
-      manifest: mirrorManifest({}, retired('moved')),
+      manifest: mirrorManifest({}, retiredFor('moved')),
     })
 
     expect(kinds(p)).toEqual(['replace-content'])
@@ -585,7 +541,7 @@ describe('diffMirror --- group R (retired id)', () => {
     const p = await plan({
       local: localTree({ 'a.psd': 'absent' }),
       drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
-      manifest: mirrorManifest({}, retired('rebased', { prevLocalMd5: 'm1' })),
+      manifest: mirrorManifest({}, retiredFor('rebased', { prevLocalMd5: 'm1' })),
     })
 
     expect(kinds(p)).not.toContain('download')
@@ -602,7 +558,10 @@ describe('diffMirror --- group R (retired id)', () => {
     const p = await plan({
       local: localTree({ 'a.psd': { md5: 'm1' } }),
       drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm1' }]),
-      manifest: mirrorManifest({}, retired('rebased', { prevLocalMd5: 'm1' })),
+      manifest: mirrorManifest(
+        {},
+        retiredFor('rebased', { prevLocalMd5: 'm1', md5: 'm1' }),
+      ),
     })
 
     expect(kinds(p)).toEqual([])
@@ -618,7 +577,7 @@ describe('diffMirror --- group R (retired id)', () => {
     const p = await plan({
       local: localTree({ 'a.psd': { md5: 'm1' } }),
       drive: driveTree([{ id: 'D1', name: 'a.psd', md5: 'm2' }]),
-      manifest: mirrorManifest({}, retired('rebased', { prevLocalMd5: 'm1' })),
+      manifest: mirrorManifest({}, retiredFor('rebased', { prevLocalMd5: 'm1' })),
       driveWins: true,
     })
 
@@ -643,14 +602,7 @@ describe('diffMirror --- group R (retired id)', () => {
       manifest: mirrorManifest(
         {},
         {
-          D1: {
-            path: 'a.psd',
-            state: 'trashed',
-            at: '2026-10-20T00:00:00.000Z',
-            md5: 'm1',
-            driveMimeType: 'application/vnd.google-apps.document',
-            localPath: null,
-          },
+          D1: retired('D1', 'a.psd', 'trashed', { md5: 'm1', driveMimeType: 'application/vnd.google-apps.document' }),
         },
       ),
     })
@@ -673,14 +625,7 @@ describe('diffMirror --- group R (retired id)', () => {
       manifest: mirrorManifest(
         {},
         {
-          D1: {
-            path: 'a.psd',
-            state: 'moved',
-            at: '2026-10-20T00:00:00.000Z',
-            md5: 'm1',
-            driveMimeType: 'application/vnd.google-apps.document',
-            localPath: null,
-          },
+          D1: retired('D1', 'a.psd', 'moved', { md5: 'm1', driveMimeType: 'application/vnd.google-apps.document' }),
         },
       ),
     })
@@ -703,15 +648,7 @@ describe('diffMirror --- group R (retired id)', () => {
       manifest: mirrorManifest(
         {},
         {
-          D1: {
-            path: 'a.psd',
-            state: 'rebased',
-            at: '2026-10-20T00:00:00.000Z',
-            md5: 'm1',
-            driveMimeType: 'application/vnd.google-apps.document',
-            localPath: null,
-            prevLocalMd5: 'm1',
-          },
+          D1: retired('D1', 'a.psd', 'rebased', { md5: 'm1', driveMimeType: 'application/vnd.google-apps.document', prevLocalMd5: 'm1' }),
         },
       ),
     })
@@ -1053,14 +990,11 @@ describe('diffMirror --- dispatch pre-gates', () => {
       manifest: mirrorManifest(
         {},
         {
-          D1: {
-            path: 'budget',
-            state: 'gone',
-            at: '2026-10-20T00:00:00.000Z',
+          D1: retired('D1', 'budget', 'gone', {
             md5: 'm0',
             driveMimeType: 'application/vnd.google-apps.spreadsheet',
             localPath: 'budget.csv',
-          },
+          }),
         },
       ),
     })
