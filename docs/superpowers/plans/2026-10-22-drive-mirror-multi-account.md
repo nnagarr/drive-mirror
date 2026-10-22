@@ -1681,25 +1681,34 @@ whose address changes becomes a different account."
 | 4 | An account's token expires while the app is closed; the refresh touches only that account's file | Task 8 | `test/runner.test.ts`, a new test that expires a token, refreshes it, and asserts the other account's token file is unchanged |
 | 5 | A second account is connected while the first account's run is in progress | Task 6 | `test/runner.test.ts`, "gives the caller its own summary when another account is running" |
 
-## Order of execution
+## Order of execution, as it was actually done
 
-This is a chain, and each link needs the one before it:
+The plan below was written before the work began, and two of its tasks turned
+out to be one. The order the work was done in:
 
-| Task | Needs |
-|---|---|
-| 1 — the account layout | nothing |
-| 2 — the app-wide settings | nothing |
-| 3 — the per-account stores | 1, 2 |
-| 4 — the account registry | 1, 2, 3 |
-| 5 — the migration | 1, 2, 3, 4 |
-| 6 — the runner is per account | 1, 2, 3 |
-| 7 — the scheduler and the task | 2, 3, 6 |
-| 8 — the app wiring | 1 through 7 |
-| 9 — the IPC and the preload | 6, 7, 8 |
-| 10 — the switcher | 9 |
-| 11 — the settings dialog | 9, 10 |
-| 12 — the log and the documents | everything |
+| Done | Was | What it was |
+|---|---|---|
+| 1 | Task 1 | the account layout |
+| 2 | Task 3 | the per-account stores |
+| 3 | **Task 2 + Task 5 + Task 4** | the settings split, the migration, the registry, and the four consumer files, as one change |
+| 4 | Task 4 | the registry's tests |
+| 5 | Task 6 | the runner is per account |
+| 6 | Task 7 | the scheduler and the Windows task |
+| 7 | Task 8 + Task 9 | the app wiring and the IPC |
+| 8 | Task 10 | the switcher |
+| 9 | Task 11 | the settings dialog |
+| 10 | Task 12 | the events, the log and the documents |
 
-Tasks 1 and 2 can be done in either order, and Task 6 can be done in parallel
-with Tasks 4 and 5. Every task ends with a green suite, a clean typecheck and
-a commit, so the work can be stopped after any task and the app still runs.
+**Why Task 2 and Task 5 became one task.** The settings split removes
+`mirrors` and `schedule` from the app's settings, and four source files and
+four test files read them. The migration has to run before the settings file
+is rewritten, or the legacy folders and schedule are gone. And the sign-in
+has to be able to make an account, so the registry has to exist. Splitting
+them leaves the tree in a state where the app does not build, so they were
+done together, and the registry's own tests came after.
+
+The reasons are recorded as rulings 29 and 30 in
+`docs/superpowers/decisions/2026-10-21-v2-rulings.md`, and the ledger for
+this plan records the rest.
+
+Every task ended with a green suite, a clean typecheck and a commit.
