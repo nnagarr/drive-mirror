@@ -40,6 +40,8 @@ export function SettingsDialog({
   const [clientSecret, setClientSecret] = useState('')
   const [guardThreshold, setGuardThreshold] = useState(settings.guardThreshold)
   const [status, setStatus] = useState<string | null>(null)
+  const currentAccount =
+    settings.accounts.find((account) => account.id === settings.currentAccountId) ?? null
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -74,18 +76,24 @@ export function SettingsDialog({
     }
   }
 
-  async function test(): Promise<void> {
+  /**
+   * Sign in.
+   *
+   * The sign-in belongs to an account: an address the app has seen before
+   * is signed back in, and an address it has not seen makes a new one.
+   */
+  async function connect(): Promise<void> {
     setBusy(true)
-    setStatus('Testing...')
+    setStatus('Waiting for the browser...')
     try {
       const result = await window.driveMirror.authenticate()
       setStatus(
         result.ok
-          ? 'The connection works.'
-          : 'The connection could not be made. Check the client id and secret.',
+          ? `Connected. ${result.email ?? 'The account'} is now the account on screen.`
+          : 'The sign-in did not finish. Check the client id and secret.',
       )
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'The connection could not be tested.')
+      setStatus(err instanceof Error ? err.message : 'The sign-in did not work.')
     } finally {
       setBusy(false)
     }
@@ -96,7 +104,9 @@ export function SettingsDialog({
     setStatus(null)
     try {
       await window.driveMirror.signOut()
-      setStatus('Signed out of Google. The client id and secret are still stored.')
+      setStatus(
+        'Signed out of this account. Its folders, its schedule and its history are kept, so signing back in restores it exactly.',
+      )
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'The sign-out did not work.')
     } finally {
@@ -115,7 +125,9 @@ export function SettingsDialog({
     setStatus(null)
     try {
       await window.driveMirror.resetConnection()
-      setStatus('The connection was cleared. Paste in a new client id and secret.')
+      setStatus(
+        'Every account was signed out and the client id and secret were cleared. Your manifests, your mirrors and your schedules are untouched.',
+      )
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'The connection was not cleared.')
     } finally {
@@ -166,9 +178,9 @@ export function SettingsDialog({
               type="button"
               className="button button--quiet"
               disabled={busy}
-              onClick={() => void test()}
+              onClick={() => void connect()}
             >
-              Test connection
+              Connect an account
             </button>
             <button
               type="button"
@@ -190,18 +202,18 @@ export function SettingsDialog({
           </p>
         </section>
 
-        <SchedulePanel
-          schedule={accountSettings.schedule}
-          onSave={onScheduleChange}
-          onRunNow={onSyncNow}
-        />
-
         <section className="dialog__section">
-          <h3>The Google connection</h3>
+          <h3>This account</h3>
           <p className="field__hint">
-            Clearing the connection forgets the sign-in and the client id and secret. It
-            does not touch your manifest, your mirrors, your schedule or your backups.
+            {currentAccount
+              ? `The account on screen is ${currentAccount.email}. Its folders, its schedule and its history are its own.`
+              : 'No account is connected. The app needs one before it can do anything.'}
           </p>
+          <SchedulePanel
+            schedule={accountSettings.schedule}
+            onSave={onScheduleChange}
+            onRunNow={onSyncNow}
+          />
           <div className="dialog__row">
             <button
               type="button"
@@ -209,8 +221,39 @@ export function SettingsDialog({
               disabled={busy}
               onClick={() => void signOut()}
             >
-              Sign out of Google
+              Sign out of this account
             </button>
+            <button
+              type="button"
+              className="button button--quiet"
+              disabled={busy}
+              onClick={() => {
+                const agreed = window.confirm(
+                  'Start a new manifest for this account?\n\n' +
+                    'The current manifest is archived and a new one is begun. The ' +
+                    'copy in your Drive is not touched.',
+                )
+                if (agreed) onStartFreshManifest()
+              }}
+            >
+              Reset this account's history
+            </button>
+          </div>
+          <p className="field__hint">
+            The manifest belongs to the Google account that made it, so it is never used
+            with another account's sign-in. Resetting the history archives the old
+            manifest and begins again - the old one is kept, so nothing is lost.
+          </p>
+        </section>
+
+        <section className="dialog__section">
+          <h3>The Google app</h3>
+          <p className="field__hint">
+            Clearing the connection signs every account out and forgets the client id and
+            secret. It does not touch your manifests, your mirrors, your schedules or
+            your backups.
+          </p>
+          <div className="dialog__row">
             <button
               type="button"
               className="button button--quiet"
@@ -218,28 +261,6 @@ export function SettingsDialog({
               onClick={() => void resetConnection()}
             >
               Reset the connection
-            </button>
-          </div>
-          <p className="field__hint">
-            The manifest belongs to the Google account that made it. If you sign in as
-            somebody else, the app stops and says so. Starting a new manifest archives
-            the old one and begins again - the old one is kept, so nothing is lost.
-          </p>
-          <div className="dialog__row">
-            <button
-              type="button"
-              className="button button--quiet"
-              disabled={busy}
-              onClick={() => {
-                const agreed = window.confirm(
-                  'Start a new manifest?\n\n' +
-                    'The current manifest is archived and a new one is begun. The ' +
-                    'copy in your Drive is not touched.',
-                )
-                if (agreed) onStartFreshManifest()
-              }}
-            >
-              Start a new manifest
             </button>
           </div>
         </section>
