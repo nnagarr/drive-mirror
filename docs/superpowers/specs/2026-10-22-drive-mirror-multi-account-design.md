@@ -47,10 +47,19 @@ IPC surface and the renderer:
 | one `sync.lock` and one in-process `inFlight` | `src/main/runner.ts:176-180`, `972-1030` |
 | one `ScheduleConfig` and one Windows task | `src/main/settings.ts:73`, `src/main/taskScheduler.ts:18` |
 | the account guard, at run time | `src/main/runner.ts:563-583` |
-| 24 IPC channels, none of them carrying an account | `src/main/ipc.ts:109-297` |
+| 23 IPC channels, none of them carrying an account | `src/main/ipc.ts:109-297` |
 | a flat mirror grid and one account label | `src/renderer/App.tsx:228-232`, `280-297` |
 
 That is the whole blast radius. The core is untouched.
+
+### A live bug this work also fixes
+
+`src/main/scheduler.ts:100-104` advances the schedule's `lastRunAt` after any
+run that returns without throwing — including a run that never happened,
+because the app was busy (`src/main/runner.ts:524-534` returns a summary
+carrying an anomaly report, not an error). The missed-run logic therefore
+never fires and **a scheduled slot is silently lost**. The fix is in §7.6 and
+it ships with this work.
 
 ---
 
@@ -84,7 +93,8 @@ That is the whole blast radius. The core is untouched.
   A Drive file id in account A's manifest means nothing in account B's Drive.
 - **An account's schedule must never run another account's mirrors.**
 - **A run for one account must never be silently skipped because another
-  account is running** without saying so.
+  account is running** without saying so, and a run that did not happen must
+  never be recorded as having happened.
 - **Adding, changing or removing a mirror in one account must never touch
   another account's mirrors**, including the shared ones: the same local
   folder, mirrored into two accounts, is two mirrors and they must not share
@@ -130,7 +140,7 @@ step, with the old layout kept.
 %LOCALAPPDATA%\DriveMirror\
   settings.json          app-wide: the account list, the current account, the
                          client-id flag, the guard threshold, start-with-Windows,
-                         the extra backup location
+                         the extra backup location, an app-level notice
   credentials.json       app-wide: the one shared client id and secret (encrypted)
   accounts\
     acc_7f3a2b\
@@ -175,8 +185,8 @@ which world you are in.
 
 **M14 — The account guard becomes structural.** Each account holds its own
 tokens and its own manifest, so the app cannot mix them. The run-time check
-survives only as a safety net for a manifest whose recorded email does not
-match the signed-in one.
+survives only as a safety net for a manifest whose recorded owner does not
+match the account it is filed under.
 
 **M15 — A changed disk letter stops only the accounts whose mirrors live on
 that disk.** Each account's manifest records the fingerprints of the disks its
@@ -187,30 +197,42 @@ a new account.** It never reuses another account's history. The dropdown
 shows every account with its email, so a mistaken sign-in is visible.
 
 **M17 — One lock for the whole app.** Two accounts never sync at the same
-instant. A scheduled run that finds the app busy is retried, and the
-missed-run logic catches the slot up if it cannot get in.
+instant.
 
 **M18 — The account switcher is a dropdown in the top bar.** The top bar
 already shows the account; it becomes a button that opens a list.
 
+**M19 — "Sync now" on an account that is busy waits, then runs.** If account A
+is syncing and you press "Sync now" on account B, the button says *"waiting
+for the other account's sync to finish"* and B runs as soon as A is done. B
+never receives A's results, and B is never silently skipped.
+
+**M20 — A run that could not happen is never recorded as having happened.**
+The summary of a skipped run says so, and the schedule's clock is not
+advanced. This is the fix for the live bug in §1.
+
+**M21 — Settings' "Test connection" button becomes "Connect an account."** It
+signs the user in, and creates or attaches the account. The account dropdown
+also offers "Connect another account".
+
 ### The destructive actions
 
-**M19 — "Sign out of this account" drops the tokens and keeps everything
+**M22 — "Sign out of this account" drops the tokens and keeps everything
 else.** The manifest, the mirrors and the schedule stay. Signing back in
 restores the account exactly as it was.
 
-**M20 — "Forget this account" deletes the account's folder for good** — the
+**M23 — "Forget this account" deletes the account's folder for good** — the
 manifest, the journal, the tokens, the per-account settings and the per-account
 manifest archive — and removes its Windows scheduled task. The files already
 on Drive are not touched. The manifest copy in the backup locations survives,
 because those live outside the account folder: the file list can be recovered
 by hand.
 
-**M21 — "Reset the connection" is app-wide.** It signs out every account and
+**M24 — "Reset the connection" is app-wide.** It signs out every account and
 clears the shared client id. Every account's manifest, mirrors and schedule
 stay. It is the closest match to what the button does today.
 
-**M22 — Signing out of the account you are looking at moves you to another
+**M25 — Signing out of the account you are looking at moves you to another
 connected account**, or to the "connect an account" screen if there is none.
 
 ---
@@ -231,9 +253,19 @@ export interface AccountRecord {
   addedAt: string
 }
 
+/** What the switcher needs to draw one line. */
+export interface AccountSummary extends AccountRecord {
+  /** Whether the account has a sign-in. */
+  signedIn: boolean
+  /** How many mirrors it has configured. */
+  mirrorCount: number
+  /** Whether it has a notice that has not been shown. */
+  hasNotice: boolean
+}
+
 export interface AppSettings {
   /** Every account this install knows about, signed in or not. */
-  accounts: AccountRecord[]
+  accounts: AccountSummary[]
   /** Which account the app is showing. Null when there are none. */
   currentAccountId: string | null
   /** Whether a client secret is stored. The secret itself is never here. */
@@ -244,8 +276,16 @@ export interface AppSettings {
   startWithWindows: boolean
   /** One extra place to keep a copy of each manifest. Null for none. */
   extraBackupPath: string | null
+  /** A problem with the app itself, shown once. */
+  pendingNotice: { message: string; at: string } | null
 }
 ```
+
+`accounts` holds **summaries**, not bare records, so the switcher is drawn
+from a single call. The summary fields are derived at read time, never stored:
+signed-in from the existence of the account's token file, mirror count and
+notice from the account's settings file. The stored record is still
+`{ id, email, addedAt }`.
 
 The `clientId` projection survives: it is read from the credential store, never
 written to the settings file.
@@ -288,8 +328,8 @@ into another account's manifest would corrupt it.
 
 ### 6.4 The account registry
 
-The list of accounts lives in `settings.json`. **Signed-in state is not a
-field**: an account is signed in exactly when
+The list of accounts lives in `settings.json`. **Signed-in state is not
+stored**: an account is signed in exactly when
 `accounts\<id>\tokens.json` exists. There is one source of truth for that,
 and it is the file itself.
 
@@ -302,6 +342,37 @@ written with `writeFile` as today, encrypted with `safeStorage` as today.
 The credential store is **unchanged**: one shared client id and secret in
 `credentials.json`, one file, one pair, as today.
 
+### 6.6 The events
+
+Every `AppEvent` gains an `accountId`:
+
+```ts
+export type AppEvent =
+  | { type: 'state'; accountId: string; state: AppState }
+  | { type: 'progress'; accountId: string; mirror: string; relPath: string; phase: string; done: number; total: number }
+  | { type: 'finished'; accountId: string; summary: RunSummary }
+  | { type: 'guard'; accountId: string; mirror: string; reason: string; message: string; canOverride: boolean }
+  | { type: 'notice'; accountId: string | null; message: string }
+  | { type: 'error'; accountId: string | null; message: string }
+```
+
+`accountId` is null only for app-level events — a failed migration, a failed
+start-up. The renderer **ignores** every event whose account is not the one on
+screen, so account A's progress never paints into account B's screen.
+
+`RunSummary` gains one field:
+
+```ts
+export interface RunSummary {
+  /* ...as today... */
+  /** Set when the run did not happen because the app was busy. */
+  skipped?: true
+}
+```
+
+`LogEvent` in `src/core/logger.ts` gains an optional `account` field, so
+every line of the log says which account it came from.
+
 ---
 
 ## 7. Behaviour
@@ -310,8 +381,8 @@ The credential store is **unchanged**: one shared client id and secret in
 
 1. The app needs a client id. If there is none, the setup wizard opens, once,
    for the whole app — not once per account. This is unchanged from today.
-2. The user presses **Connect another account** (or, on a fresh install,
-   **Connect Google**).
+2. The user presses **Connect another account** in the dropdown, or
+   **Connect an account** in Settings (M21).
 3. The app opens the browser to Google's sign-in page with the **shared**
    client id and a loopback redirect, exactly as today.
 4. Google returns the code. The app exchanges it for tokens, **holding them
@@ -321,7 +392,10 @@ The credential store is **unchanged**: one shared client id and secret in
    - If that call fails, the sign-in is refused with a clear message: the app
      cannot tell which account this is, so it will not guess. No account is
      created, and no token file is written.
-6. The app looks for an account whose recorded email equals that address.
+6. The app looks for an account whose recorded email **matches the address
+   case-insensitively**. Google addresses are case-insensitive, so the
+   comparison is made on the lower-cased forms. The address is stored exactly
+   as Google returned it, for display.
    - **Found and signed out** → the tokens are written into that account's
      folder and the account becomes the current one. Everything is exactly as
      it was.
@@ -331,14 +405,23 @@ The credential store is **unchanged**: one shared client id and secret in
      connected".
 7. The new account becomes the current account.
 
+`authenticate` returns `{ ok, email?, accountId?, message? }`. The `message`
+field carries the reason for a refusal.
+
 ### 7.2 The account guard
 
 The run-time check in `src/main/runner.ts:563-583` is kept, with its message
-unchanged, but it now compares the signed-in address against the manifest's
-recorded owner **inside the account being run**. It should never fire in
-normal operation. It fires if the manifest's `accountEmail` is not a string,
-or if it names a different address than the one signed in — in which case the
-run is blocked and both addresses are named.
+unchanged, but it changes in two ways:
+
+- **The address it compares against is the registry's**, not a live `about`
+  call. The account's own tokens are in the account's own folder, so the
+  address of the account being run is known locally. The guard therefore
+  needs no network call, and a network failure cannot disable it.
+- **A missing or non-string owner is not a failure.** It means "no owner
+  recorded", and the first run claims the manifest for the signed-in account,
+  exactly as today (`src/main/runner.ts:580-583`). Only an owner that is
+  recorded **and different** blocks the run, and the message names both
+  addresses.
 
 ### 7.3 The switcher
 
@@ -349,8 +432,9 @@ The top-bar account label becomes a button. Opening it shows:
 - **Connect another account**;
 - **Forget this account** (only for the current account).
 
-Choosing an account makes it current. The whole screen changes: its mirrors,
-its schedule, its notices, its sign-in state.
+The list comes from `AppSettings.accounts` in one call. Choosing an account
+makes it current. The whole screen changes: its mirrors, its schedule, its
+notices, its sign-in state.
 
 ### 7.4 Mirrors
 
@@ -377,35 +461,56 @@ Each account has its own `ScheduleConfig` and its own scheduler.
   `windows-task`. The task is named `Drive Mirror Sync - <email>` and runs
   `"<exe>" --sync-once --account <id>`.
 
-`--sync-once` grows an `--account <id>` argument. With `--account`, the app
-runs **that** account and quits. Without it, `--sync-once` keeps its current
-meaning: run every account that has the Windows-task mechanism, then quit.
-An `--account` that names an unknown account is refused with a message and
-nothing is run.
+`--sync-once` grows an `--account <id>` argument:
+
+- With `--account <id>`, the app runs **that** account and quits.
+- Without it, the app runs every account whose mechanism is `windows-task`,
+  **one after another**, taking and releasing the lock between them, and then
+  quits. This is the manual "sync everything" escape hatch.
+- An `--account` that names an unknown account is refused with a message and
+  nothing is run.
 
 Mechanism exclusivity is unchanged: an account uses the in-app timer **or** a
 Windows task, never both. Switching a schedule off removes that account's
 Windows task.
 
-### 7.6 The lock and the mutex
+**The legacy task is removed by the migration** (§8). The author's machine
+already has a task named `Drive Mirror Sync`, firing `--sync-once` with no
+account. Left alone it would keep firing forever alongside the new
+per-account tasks.
 
-One `sync.lock` for the whole app, and one in-process `inFlight`, exactly as
-today. Two accounts never sync at the same instant.
+### 7.6 The lock, the mutex, and the missed slot
 
-When a scheduled run finds the lock held:
+**The lock file is app-wide**, as today: one `sync.lock`, one exclusive
+create, stale after six hours. Two accounts never sync at the same instant.
 
-- the in-app timer retries the same slot when the lock frees;
-- a `--sync-once` run waits and retries every 60 seconds for up to 5 minutes,
-  then gives up and logs that the slot was missed;
-- either way the existing missed-run logic catches the slot up at the next
-  tick, so a skipped run is not lost.
+**Within one process**, the state that was global becomes per account:
+
+- a run for an account that is already running **joins that account's run**,
+  as today, but only that account's run;
+- a run for an account that is *not* running, while **another** account holds
+  the lock, **waits** for the lock and then runs (M19). The user is told it is
+  waiting.
+
+**A skipped run is never recorded as having happened.** The runner sets
+`skipped: true` on the summary of a run that could not take the lock. The
+scheduler reads that field and, when it is set, does **not** advance
+`lastRunAt` and re-arms the timer to retry the same slot. This is the fix for
+the live bug in §1: today the slot is lost.
+
+- The in-app timer retries the same slot when the lock frees.
+- A `--sync-once` run waits and retries every 60 seconds for up to 5 minutes,
+  then gives up, logs that the slot was missed, and exits. The missed-run
+  logic catches the slot up at the next tick.
 
 ### 7.7 The notices
 
 A notice belongs to the account that produced it and is stored in that
 account's settings. The current account's notice is shown in the window. A
 notice from another account is marked in the dropdown, so it is not hidden
-while you are looking at a different account.
+while you are looking at a different account. An app-level notice — a failed
+migration, a failed start-up — is stored in the app-wide settings and shown as
+a banner.
 
 ### 7.8 The four actions
 
@@ -437,27 +542,30 @@ The README's table changes to:
 - The mirror grid shows the current account's mirrors. It is not grouped —
   there is nothing to group, because only one account is on screen.
 - The Settings dialog splits into an **app-wide** section (client id and
-  secret, start with Windows, guard threshold, the extra backup location,
-  "Reset the connection") and a **current account** section (the schedule,
-  the account's backup copies, "Sign out of this account", "Forget this
-  account", "Reset this account's history").
+  secret, **Connect an account**, start with Windows, guard threshold, the
+  extra backup location, "Reset the connection") and a **current account**
+  section (the schedule, the account's backup copies, "Sign out of this
+  account", "Forget this account", "Reset this account's history").
 - The empty state has two forms: no accounts at all → "Connect an account";
   accounts exist but none is signed in → "Sign in".
 - The setup wizard opens when there is no client id, once for the app.
 
 ### 7.11 The IPC surface
 
-Every account-scoped channel takes an account id as its first argument, and
-may omit it to mean "the current account". The app-wide channels do not.
+Every account-scoped channel takes an account id as its first argument. **The
+id is optional on every one of them and means "the current account"** — one
+convention, not three. When there is no current account, a read returns an
+empty state and a mutation returns `{ ok: false, message: 'no account is
+selected' }`.
 
-**App-wide**
+**App-wide** (12)
 
 | Channel | Args → result |
 |---|---|
 | `drive-mirror:get-app-settings` | → `AppSettings` |
 | `drive-mirror:save-app-settings` | `(patch: Partial<AppSettings>)` → `AppSettings` |
 | `drive-mirror:set-credentials` | `(clientId, clientSecret)` → `{ ok }` |
-| `drive-mirror:authenticate` | → `{ ok, email?, accountId? }` |
+| `drive-mirror:authenticate` | → `{ ok, email?, accountId?, message? }` |
 | `drive-mirror:sign-out` | `(accountId)` → void |
 | `drive-mirror:forget-account` | `(accountId)` → `{ ok }` |
 | `drive-mirror:reset-connection` | → `{ ok }` |
@@ -467,7 +575,7 @@ may omit it to mean "the current account". The app-wide channels do not.
 | `drive-mirror:open-external` | `(url)` → void |
 | `drive-mirror:open-log-folder` | → void |
 
-**Account-scoped**
+**Account-scoped** (15)
 
 | Channel | Args → result |
 |---|---|
@@ -487,27 +595,31 @@ may omit it to mean "the current account". The app-wide channels do not.
 | `drive-mirror:download-restored` | `(accountId, mirror, driveFileId)` → `{ ok, path } \| { ok: false, message }` |
 | `drive-mirror:show-manifest` | `(accountId)` → void |
 
-`drive-mirror:start-fresh-manifest` becomes
-`drive-mirror:reset-account-history`. `drive-mirror:sign-out` gains an
-account id. Everything else keeps its name.
+That is **27 channels, up from 23** — four new: `get-account-settings`,
+`save-account-settings`, `forget-account`, `switch-account`. `get-settings`
+and `save-settings` become `get-app-settings` and `save-app-settings`.
+`start-fresh-manifest` becomes `reset-account-history`. `sign-out` and
+`show-manifest` gain an account id.
 
 `AppState` gains `accountId`. It keeps `accountEmail` and `needsAuth`, which
 now describe the account it is about.
 
 ### 7.12 The runner and the scheduler
 
-**The runner** takes an account id on every method that acts on a mirror, and
-resolves the account's client, store and settings at the start of the call
-rather than holding them as injected singletons. The `RunnerDeps.client` and
-`RunnerDeps.store` become a resolver:
+**One runner, shared by every account.** It resolves the account per call:
 
 ```ts
 export interface AccountRuntime {
   id: string
   email: string
+  /** Whether the account has a sign-in. */
+  signedIn: boolean
   client: DriveClient
   store: ManifestStore
   settings: () => Promise<AccountSettings>
+  /** The account's tokens, and where to write a refreshed one. */
+  loadTokens: () => Promise<OAuthTokens | null>
+  saveTokens: (tokens: OAuthTokens) => Promise<void>
 }
 
 export interface RunnerDeps {
@@ -517,18 +629,30 @@ export interface RunnerDeps {
 }
 ```
 
+The state inside the runner that was global becomes **per account**:
+
+| Today | Becomes |
+|---|---|
+| `cards`, keyed by mirror name | keyed by account id **and** mirror name |
+| one `inFlight` promise | one per account |
+| one `running` flag and one `phase` | one pair per account |
+| one pending guard | one per account |
+| one `lastRun` summary | one per account |
+
+Without this, two accounts that both have a mirror called "Medicine" would
+show each other's file counts, and account B's "Sync now" would receive
+account A's summary.
+
 The run itself is unchanged: lock, read, check the account, loop the mirrors,
-checkpoint, write the backups, record the run time.
+checkpoint, write the backups, record the run time. Two changes: the summary
+of a skipped run carries `skipped: true`, and the backups are written per
+account (§7.9).
 
 **The scheduler** becomes one instance per account, held in a
 `Map<accountId, Scheduler>` by the app, created and destroyed as accounts are
 added and forgotten. Each instance reads and writes its own account's
-settings and registers its own Windows task. The class itself changes little:
-it gains an account id and a way to name its task.
-
-**The write-back of backups** changes: each account's manifest is written to
-`backups\<email>\manifest.json` and to `<extraBackupPath>\<email>\manifest.json`,
-so two accounts never write over each other.
+settings, registers its own Windows task, and does not advance its clock when
+the summary it gets back says the run was skipped.
 
 ---
 
@@ -537,34 +661,56 @@ so two accounts never write over each other.
 The migration runs once, at start-up, before anything else. It follows the
 pattern of the existing one-time cleanup at `src/main/index.ts:516-531`.
 
-**It runs when** the app data dir has no `accounts\` folder and has a legacy
-`manifest.json`.
+**It runs when** the marker `accounts\.migrated` is absent and a legacy
+`manifest.json` exists.
 
-**It does this, in order:**
+**The order matters, and it is the opposite of the obvious one.** The legacy
+`settings.json` is **copied** to `legacy\settings.json` *before* the new
+app-wide `settings.json` is written, because they share a path. If the new
+file were written first and the migration then failed, the next start would
+read the new-shaped file as legacy — and the author's schedule, its mechanism
+and the extra backup path would be gone, because they exist nowhere else.
 
-1. Create `accounts\acc_<new id>\`.
-2. **Copy** (not move) the legacy `manifest.json`, `journal.ndjson` and
-   `tokens.json` into it. Copy, so the originals are still the copy of record.
-3. Write `accounts\acc_<new id>\settings.json` with the legacy `mirrors`,
-   the legacy `schedule` and the legacy `pendingNotice`.
-4. Read the copied manifest back and check it parses, and that its `version`
-   is 11. Also check the copied settings parse.
-5. Write the new app-wide `settings.json`:
-   - `accounts`: one record, with the id, the legacy manifest's
-     `accountEmail` (or an empty string if it had none), and the current time;
+**The steps:**
+
+1. Read the legacy settings from `legacy\settings.json` if it is there, else
+   from `<appData>\settings.json`. **Read first, before anything is written.**
+2. If `legacy\settings.json` does not exist and the source file does, **copy**
+   the source to `legacy\settings.json`. From this moment it is the copy of
+   record, and every later step reads the settings from it, never from the
+   app root.
+3. Remove any partial `accounts\acc_*` folder left by an earlier failed
+   attempt.
+4. Create `accounts\acc_<new id>\`.
+5. **Copy** (not move) the legacy `manifest.json`, `journal.ndjson` and
+   `tokens.json` into it.
+6. Write `accounts\acc_<id>\settings.json` from the settings read in step 1,
+   applying the same singular-`backupPath` shim the settings store applies
+   (`src/main/settings.ts:270-274`), so an old file is not misread.
+7. Verify: the copied manifest parses and has version 11; the account
+   settings parse; the legacy settings copy still parses.
+8. Write the new app-wide `settings.json`:
+   - `accounts`: one summary, with the id, the legacy manifest's
+     `accountEmail` (or an empty string if it had none), the current time, and
+     the derived `signedIn`, `mirrorCount` and `hasNotice`;
    - `currentAccountId`: that id;
    - `clientSecretSet`, `guardThreshold` and `startWithWindows`: carried over;
-   - `extraBackupPath`: the first legacy `backupPaths` entry that is not the
-     app's own default backup directory, or null.
-6. **Only now** move the legacy `manifest.json`, `journal.ndjson`,
-   `tokens.json` and `settings.json` into `legacy\`, keeping them.
-7. Log one line naming the account folder, the legacy folder and the account
-   email.
+   - `extraBackupPath`: the first entry of the legacy `backupPaths` — after
+     the shim — that is not the app's own default backup directory, or null.
+9. **Move** the legacy `manifest.json`, `journal.ndjson` and `tokens.json`
+   into `legacy\`, keeping them. The legacy `settings.json` is already in
+   `legacy\` from step 2.
+10. Delete the legacy Windows task `Drive Mirror Sync`, if it is registered.
+11. Write the marker `accounts\.migrated`.
+12. Log one line naming the account folder, the legacy folder and the account
+    email.
 
-**If any step fails:** the partial account folder is removed, the legacy files
-are left exactly where they were, the app reports the failure with the path,
-and the app starts with **no accounts**. The legacy data is untouched, and the
-migration is retried at the next start.
+**If any step fails:** the partial account folder is removed, everything else
+is left exactly where it was, the app reports the failure with the path, and
+the app starts with **no accounts**. The next start re-runs the migration
+from step 1, and it reads `legacy\settings.json`, which by then holds the
+author's schedule and extra backup path. The migration is therefore
+**resumable**, and it is idempotent.
 
 **What it does not touch:** the credential store, the log, the lock file, the
 extra backup location's existing contents, and the files on Drive.
@@ -580,13 +726,14 @@ per-account copy goes to `E:\.drive-mirror-backup\<email>\manifest.json`.
 
 | File | What |
 |---|---|
-| `test/runner.test.ts:642-678` | the account-mismatch block becomes "the account's manifest belongs to that account"; the harness's `accountEmail` dep moves behind the account resolver |
+| `test/runner.test.ts:642-678` | the account-mismatch block becomes "the account's manifest belongs to that account"; a missing or non-string owner still claims the manifest, a different one still blocks |
 | `test/runner.test.ts:55-79` | one `settings` object becomes an app settings object plus a per-account one; one `manifest.json` becomes one per account |
-| `test/ipc.test.ts:26-50` | the channel list changes — 24 channels become 27 |
+| `test/runner.test.ts:173-175` | the "never issues a delete" check is unchanged, but the runner now resolves its account per call |
+| `test/ipc.test.ts:26-50` | the channel list: **23 becomes 27** |
 | `test/settings.test.ts` | asserts on the flat `Settings` shape; becomes `AppSettings` and `AccountSettings` |
 | `test/freshInstall.test.ts:24-50` | the new defaults: no accounts, no current account, no client id, schedule off, everything inside the app's own data directory |
 | `test/oauth.test.ts:127-172` | the credential store is unchanged; the token store moves into the account folder |
-| `test/scheduler.test.ts` | one scheduler becomes one per account; the task is registered per account |
+| `test/scheduler.test.ts` | one scheduler becomes one per account; the task is registered per account; a skipped run does not advance the clock |
 | `test/schtasks.test.ts:56-64` | the task name is now built from the account's email |
 | `test/backup.test.ts:39-47`, `122-127` | the backup paths become the new per-account layout |
 
@@ -600,28 +747,41 @@ per-account copy goes to `E:\.drive-mirror-backup\<email>\manifest.json`.
 
 ### What is new
 
-- The migration: a legacy layout becomes the new layout, with the mirrors,
-  the schedule and the sign-in intact; the legacy folder is kept; a failed
-  copy leaves the legacy files alone and starts with no accounts; the
-  migration is idempotent.
-- Signing in with a known email re-attaches to the signed-out account; an
+- **The migration.** A legacy layout becomes the new layout, with the mirrors,
+  the schedule, the sign-in and the extra backup location intact. The legacy
+  folder is kept. A failed copy leaves the legacy files alone and starts with
+  no accounts. The migration is idempotent, and it is **resumable**: a
+  failure after the new settings file has been written still recovers, because
+  the legacy settings copy is the copy of record. The legacy Windows task is
+  removed. A legacy file with the singular `backupPath` is read correctly.
+- **Signing in.** A known email re-attaches to the signed-out account; an
   unknown email creates a new account; a known email that is already signed in
-  is refused; a failed `about` call refuses the sign-in and writes nothing.
-- Two accounts, the same local folder, two mirrors: independent file lists,
-  independent runs, and one account's run does not touch the other's.
-- The per-account Windows task: the name carries the email, the command
+  is refused; a failed `about` call refuses the sign-in and writes nothing;
+  the email match is case-insensitive.
+- **Two accounts, the same local folder.** Two mirrors, independent file
+  lists, independent runs, and one account's run does not touch the other's.
+  Two accounts may both have a mirror with the same name, and each shows its
+  own card.
+- **The busy case.** A run for a busy account waits and then runs, and gets
+  its own summary — never the other account's. A run that could not happen is
+  marked `skipped`, and **the schedule's clock does not advance**, so the slot
+  is caught up rather than lost. This is the live bug in §1.
+- **The per-account Windows task.** The name carries the email, the command
   carries the account id, and the task is removed when the account is
   forgotten or its schedule is switched off.
-- "Forget this account" removes that account's folder and task, and leaves
+- **"Forget this account"** removes that account's folder and task, leaves
   every other account alone, and leaves the backup copy alone.
-- "Reset the connection" signs out every account and clears the client id,
+- **"Reset the connection"** signs out every account and clears the client id,
   and leaves every manifest, mirror and schedule alone.
-- The account id on the command line: an unknown id runs nothing.
-- The shared client id signs in two different accounts.
-- The overlap and name-uniqueness rules are per account, and the removed
+- **The account id on the command line.** An unknown id runs nothing.
+- **The shared client id** signs in two different accounts.
+- **The events.** Every event carries the account it belongs to, and the
+  renderer ignores another account's events. A notice with no account goes to
+  the app-level notice.
+- **The overlap and name-uniqueness rules** are per account, and the removed
   mirror's root stays reserved within its own account.
-- The switcher: switching accounts changes the mirrors, the schedule and the
-  sign-in state on screen.
+- **The switcher.** Switching accounts changes the mirrors, the schedule and
+  the sign-in state on screen.
 
 The `test/freshInstall.test.ts` rule that no source file names a drive letter
 or one of the author's folders still holds, and the migration is generic.
@@ -634,14 +794,14 @@ or one of the author's folders still holds, and the migration is generic.
 - The sanitiser for an email used as a folder name, and where it lives.
 - The exact wording of every new message: the refused sign-in, the already
   connected account, the failed migration, the forgotten account, the skipped
-  slot.
+  slot, the waiting run.
 - The exact look of the switcher dropdown, and how the marks for signed-in,
   mirror count and notice are drawn.
 - Whether the app's own backup directory keeps its current name, and whether
   the extra location is chosen with a folder picker.
 - Whether the log's account field is the id or the email.
-- The order in which the app-wide and per-account settings are written during
-  the migration, and the exact verification performed on the copied files.
+- The exact verification performed on the copied files during the migration.
+- How the "waiting for the other account's sync to finish" state is drawn.
 
 ## 11. Risks the user was told about
 
@@ -657,9 +817,14 @@ or one of the author's folders still holds, and the migration is generic.
   so the situation is visible, but the app does not guess. This is the user's
   choice: they were offered to rebind the history and chose always-new.
 - **The migration is the riskiest thing in this work.** It touches the only
-  copy of the manifest. It copies before it moves, it verifies before it
-  deletes, and it leaves the legacy files alone on any failure.
+  copy of the manifest. It copies before it moves, it copies the legacy
+  settings file before it overwrites anything, it verifies before it deletes,
+  it is resumable, and it leaves the legacy files alone on any failure.
 - **Two accounts on one disk, one of them changed, is still a busy machine.**
   The app holds one lock, so a run for one account waits for the other. With
   two accounts on an hourly schedule, a run can be delayed. The missed-run
-  logic catches the slot up.
+  logic catches the slot up, and the skipped-slot fix in §7.6 is what makes
+  that work.
+- **A scheduled slot can still be lost** if the app is busy for longer than
+  the retry window and the next tick is a long way off. The slot is caught up
+  at the next tick, so the work is not lost, only delayed.
