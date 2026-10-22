@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const { handlers } = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+const { handlers } = vi.hoisted(() => ({ handlers: new Map<string, (...args: unknown[]) => unknown>() }))
 
 vi.mock('electron', () => ({
   ipcMain: {
