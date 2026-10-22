@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const { handlers } = vi.hoisted(() => ({ handlers: new Map<string, (...args: unknown[]) => unknown>() }))
+type IpcHandler = (...args: unknown[]) => unknown
+const { handlers } = vi.hoisted(() => ({ handlers: new Map<string, IpcHandler>() }))
 
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, handler: unknown): void => {
-      handlers.set(channel, handler)
+      handlers.set(channel, handler as IpcHandler)
     },
   },
   shell: { openExternal: async (): Promise<void> => undefined },
