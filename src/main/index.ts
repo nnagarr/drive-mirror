@@ -14,7 +14,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createDriveClient } from '../drive/httpClient'
 import type { DriveClient } from '../drive/client'
-import { buildAuthUrl, exchangeCode, refreshAccessToken } from '../drive/oauth'
+import { buildAuthUrl, exchangeCode } from '../drive/oauth'
 import { createLogger } from '../core/logger'
 import { createManifestStore, emptyManifest } from '../core/manifest'
 import { mirrorConfigsFromManifest } from '../core/mirrorConfig'
@@ -30,13 +30,16 @@ import { registerIpc } from './ipc'
 import { createMainWindow, appIconPath } from './window'
 import { createRunner } from './runner'
 import type { AccountRuntime } from './runner'
-import { createScheduler } from './scheduler'
+import { createScheduler } from './scheduler'
+
 import type { Scheduler } from './scheduler'
 import { setPendingNotice } from './notice'
-import { registerTask, taskExists, unregisterLegacyTask, unregisterTask } from './taskScheduler'
+import { registerTask, taskExists, unregisterLegacyTask, unregisterTask } from './taskScheduler'
+
 import { parseCli } from './cli'
+
+import { accessTokenFor } from './refreshToken'
 import type { AppEvent } from './ipc'
-import type { OAuthTokens } from '../drive/oauth'
 
 /** The channel the renderer listens on. */
 const EVENT_CHANNEL = 'drive-mirror:event'
@@ -110,30 +113,14 @@ const accountRegistry = createAccountRegistry({
  * expire.
  *
  * The token and the refresh belong to the account, so one account's
- * expiry cannot disturb another account's sign-in.
+ * expiry cannot disturb another account's sign-in. The refresh itself
+ * lives in its own module, where it can be tested without Electron.
  */
-async function accessTokenFor(id: string): Promise<string> {
-  const tokens = await accountTokenStore.read(id)
-  if (!tokens) throw new Error('the app is not signed in')
-  if (tokens.expiry_date - Date.now() > 60_000) return tokens.access_token
-
+async function accountAccessToken(id: string): Promise<string> {
   const clientId = credentialStore.getClientId()
   const clientSecret = credentialStore.getClientSecret()
-  if (!clientId || !clientSecret) {
-    throw new Error('the OAuth client id or secret is missing')
-  }
-  const refreshed = await refreshAccessToken({
-    clientId,
-    clientSecret,
-    refreshToken: tokens.refresh_token,
-  })
-  const next: OAuthTokens = {
-    ...tokens,
-    access_token: refreshed.access_token,
-    expiry_date: refreshed.expiry_date,
-  }
-  await accountTokenStore.write(id, next)
-  return next.access_token
+  const credentials = clientId && clientSecret ? { clientId, clientSecret } : null
+  return accessTokenFor(id, accountTokenStore, credentials)
 }
 
 /** The Drive clients, one per account, so each has its own sign-in. */
@@ -151,7 +138,7 @@ async function accountRuntime(id: string): Promise<AccountRuntime | null> {
   if (!record) return null
   let accountClient = clients.get(id)
   if (!accountClient) {
-    accountClient = createDriveClient(() => accessTokenFor(id))
+    accountClient = createDriveClient(() => accountAccessToken(id))
     clients.set(id, accountClient)
   }
   return {
@@ -248,7 +235,12 @@ async function backupPaths(): Promise<string[]> {
  * the address that is actually listening. It is closed as soon as the code
  * arrives.
  */
-async function authenticate(): Promise<{ ok: boolean; email?: string }> {
+async function authenticate(): Promise<{
+  ok: boolean
+  email?: string
+  accountId?: string
+  message?: string
+}> {
   const clientId = credentialStore.getClientId()
   const clientSecret = credentialStore.getClientSecret()
   if (!clientId || !clientSecret) {
@@ -290,9 +282,15 @@ async function authenticate(): Promise<{ ok: boolean; email?: string }> {
       // The app cannot tell which account this is, so it will not guess.
       throw new Error('the app could not read your Google account address, so it will not sign you in')
     }
+    const existing = await accountRegistry.findByEmail(email)
+    if (existing && (await accountTokenStore.has(existing.id))) {
+      // The account is already connected. Signing in again would change
+      // nothing, so the app says so rather than going quietly on.
+      return { ok: false, message: 'that account is already connected' }
+    }
     const account = await accountRegistry.signIn(email, tokens)
     await accountRegistry.setCurrent(account.id)
-    return { ok: true, email }
+    return { ok: true, email, accountId: account.id }
   } catch (err) {
     emit({
       type: 'error',
@@ -368,7 +366,8 @@ function waitForCode(
  * just because the window happens to be open. The lock *file*, not the
  * instance lock, is what stops two runs at once.
  */
-const cli = parseCli(process.argv)
+const cli = parseCli(process.argv)
+
 const syncOnce = cli.syncOnce
 
 if (!syncOnce && !app.requestSingleInstanceLock()) {
@@ -581,11 +580,16 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         )
         await store.write(emptyManifest())
       },
-      applySchedule: async (accountId: string) => {
-        const app = await currentSettings()
-        const account = app.accounts.find((a) => a.id === accountId)
-        if (!account) return
-        await schedulerFor(account.id, account.email).applySchedule()
+      applySchedule: async (accountId: string) => {
+
+        const app = await currentSettings()
+
+        const account = app.accounts.find((a) => a.id === accountId)
+
+        if (!account) return
+
+        await schedulerFor(account.id, account.email).applySchedule()
+
       },
       applyAutoLaunch(enabled: boolean) {
         // In development the executable is Electron's own, which is not

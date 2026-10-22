@@ -90,7 +90,7 @@ export function SettingsDialog({
       setStatus(
         result.ok
           ? `Connected. ${result.email ?? 'The account'} is now the account on screen.`
-          : 'The sign-in did not finish. Check the client id and secret.',
+          : (result.message ?? 'The sign-in did not finish. Check the client id and secret.'),
       )
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'The sign-in did not work.')

@@ -35,7 +35,7 @@ export interface DriveMirrorApi {
     accountId?: string,
   ): Promise<AccountSettings>
   setCredentials(clientId: string, clientSecret: string): Promise<{ ok: boolean }>
-  authenticate(): Promise<{ ok: boolean; email?: string }>
+  authenticate(): Promise<{ ok: boolean; email?: string; accountId?: string; message?: string }>
   signOut(accountId?: string): Promise<void>
   openLogFolder(): Promise<void>
   showManifest(accountId?: string): Promise<void>

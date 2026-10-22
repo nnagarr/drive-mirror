@@ -64,9 +64,31 @@ export function App(): JSX.Element {
    */
   const currentAccountRef = useRef<string | null>(null)
 
+  /**
+   * Re-read everything the screen shows.
+   *
+   * Switching, connecting or forgetting an account changes the app's
+   * settings, the account's settings and the state, so all three are read
+   * again. Reading only the state would leave the switcher showing the
+   * old account.
+   */
   const refresh = useCallback(async () => {
     try {
-      setState(await window.driveMirror.getState())
+      const [app, account, state] = await Promise.all([
+        window.driveMirror.getSettings(),
+        window.driveMirror.getAccountSettings(),
+        window.driveMirror.getState(),
+      ])
+      setSettings(app)
+      setAccountSettings(account)
+      setState(state)
+      setSummary(state.lastRun)
+      // A problem that happened while nobody was watching is waiting in
+      // the account's settings. It is shown once, and then it is cleared.
+      if (account.pendingNotice) {
+        setNotice(account.pendingNotice.message)
+        void window.driveMirror.saveAccountSettings({ pendingNotice: null })
+      }
     } catch {
       // The state will be right the next time something happens.
     }
@@ -128,7 +150,6 @@ export function App(): JSX.Element {
       }
     })
 
-    void api.getState().then(setState).catch(() => setError('The app state could not be read.'))
     void api.appIcon().then(setIcon).catch(() => undefined)
     void api
       .getSettings()
@@ -142,24 +163,12 @@ export function App(): JSX.Element {
       })
       .catch(() => undefined)
 
-    // The account's own settings: its schedule, and the note left by a
-    // run the user did not watch.
-    void api
-      .getAccountSettings()
-      .then((loaded) => {
-        setAccountSettings(loaded)
-        // A problem that happened while nobody was watching is waiting in
-        // the account's settings. It is shown once, and then it is
-        // cleared.
-        if (loaded.pendingNotice) {
-          setNotice(loaded.pendingNotice.message)
-          void api.saveAccountSettings({ pendingNotice: null })
-        }
-      })
-      .catch(() => undefined)
+    // The state, the account's settings, and the note left by a run the
+    // user did not watch.
+    void refresh()
 
     return off
-  }, [])
+  }, [refresh])
 
   const sync = useCallback(async (mirrorName?: string) => {
     setError(null)
@@ -265,7 +274,7 @@ export function App(): JSX.Element {
     setError(null)
     const result = await window.driveMirror.authenticate()
     if (!result.ok) {
-      setError('The sign-in did not finish. Nothing was changed.')
+      setError(result.message ?? 'The sign-in did not finish. Nothing was changed.')
       return
     }
     await refresh()
@@ -309,6 +318,7 @@ export function App(): JSX.Element {
           <button
             type="button"
             className="button button--quiet"
+            disabled={Boolean(state?.needsAuth)}
             onClick={() => setEditing({ name: '', root: '', drivePath: '' })}
           >
             Add a folder
@@ -326,7 +336,11 @@ export function App(): JSX.Element {
             disabled={running}
             onClick={() => void sync()}
           >
-            {running ? 'Syncing...' : 'Sync now'}
+            {state?.phase === 'waiting'
+              ? 'Waiting for the other account...'
+              : running
+                ? 'Syncing...'
+                : 'Sync now'}
           </button>
         </div>
       </header>
@@ -383,6 +397,13 @@ export function App(): JSX.Element {
                 The app needs a Google account before it can do anything.{' '}
                 <button type="button" className="link" onClick={() => void connectAccount()}>
                   Connect one
+                </button>
+              </p>
+            ) : state?.needsAuth ? (
+              <p>
+                This account is not signed in, so nothing can be mirrored yet.{' '}
+                <button type="button" className="link" onClick={() => void connectAccount()}>
+                  Sign in
                 </button>
               </p>
             ) : (

@@ -103,7 +103,7 @@ export interface IpcDeps {
   forgetAccount(accountId: string): Promise<void>
   saveSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   setCredentials(clientId: string, clientSecret: string): Promise<{ ok: boolean }>
-  authenticate(): Promise<{ ok: boolean; email?: string }>
+  authenticate(): Promise<{ ok: boolean; email?: string; accountId?: string; message?: string }>
   signOut(accountId: string): Promise<void>
   openLogFolder(): Promise<void>
   showManifest(accountId: string): Promise<void>
