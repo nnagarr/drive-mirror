@@ -13,6 +13,7 @@
 
 import { rm } from 'node:fs/promises'
 import { accountDir, newAccountId } from './accountPaths'
+import { defaultAccountSettings } from './accountSettings'
 import type { AccountSettingsStore } from './accountSettings'
 import type { AccountTokenStore } from './accountTokens'
 import type { AccountRecord, AccountSummary, AppSettings } from './settings'
@@ -86,6 +87,9 @@ export function createAccountRegistry(deps: {
     await deps.saveAppSettings({
       accounts: [...app.accounts, { ...record, signedIn: false, mirrorCount: 0, hasNotice: false }],
     })
+    // The account's folder is made now, not when it first syncs, so the
+    // account is a world from the moment it exists.
+    await deps.accountSettings.write(record.id, defaultAccountSettings())
     return record
   }
 

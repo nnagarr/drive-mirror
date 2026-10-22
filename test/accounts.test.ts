@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -11,9 +12,20 @@ import {
   createAccountSettingsStore, defaultAccountSettings,
 } from '../src/main/accountSettings'
 import { createAccountTokenStore } from '../src/main/accountTokens'
+import { createAccountRegistry, findAccountByEmail } from '../src/main/accounts'
+import { createSettingsStore } from '../src/main/settings'
 import type { SafeStorageLike } from '../src/main/settings'
 
 const ROOT = join('C:', 'appdata', 'DriveMirror')
+
+/** A set of tokens, for an account that is signed in. */
+const TOKENS = {
+  access_token: 'a',
+  refresh_token: 'r',
+  expiry_date: 1,
+  scope: 's',
+  token_type: 'Bearer',
+}
 
 /**
  * A stand-in for Electron's safeStorage.
@@ -33,6 +45,27 @@ function fakeSafeStorage(): SafeStorageLike {
 /** A temporary app data root, so the tests write to a temp folder. */
 async function tempRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'dm-accounts-'))
+}
+
+/** The registry over a temporary app data directory. */
+async function registryBox() {
+  const root = await tempRoot()
+  const appSettings = createSettingsStore(join(root, 'settings.json'))
+  const accountSettings = createAccountSettingsStore(root)
+  const tokens = createAccountTokenStore(root, fakeSafeStorage())
+  const registry = createAccountRegistry({
+    root,
+    appSettings: () => appSettings.read(),
+    saveAppSettings: async (patch) => {
+      const current = await appSettings.read()
+      const next = { ...current, ...patch }
+      await appSettings.write(next)
+      return next
+    },
+    accountSettings,
+    tokens,
+  })
+  return { root, appSettings, accountSettings, tokens, registry }
 }
 
 describe('the account layout', () => {
@@ -151,5 +184,90 @@ describe('the account token store', () => {
     await tokens.write('acc_7f3a2b', { access_token: 'secret-token', refresh_token: 'r', expiry_date: 1, scope: 's', token_type: 'Bearer' })
     const raw = await readFile(accountTokensPath(root, 'acc_7f3a2b'), 'utf8')
     expect(raw).not.toContain('secret-token')
+  })
+})
+
+describe('the account registry', () => {
+  it('finds an account by its address, whatever the case', async () => {
+    const box = await registryBox()
+    const made = await box.registry.create('You@Example.com')
+    expect(await findAccountByEmail(await box.registry.list(), 'you@example.com')).not.toBeNull()
+    expect(await findAccountByEmail(await box.registry.list(), 'YOU@EXAMPLE.COM')).not.toBeNull()
+    expect(await findAccountByEmail(await box.registry.list(), 'other@example.com')).toBeNull()
+    expect(made.email).toBe('You@Example.com')
+  })
+
+  it('says whether an account is signed in and how many mirrors it has', async () => {
+    const box = await registryBox()
+    const made = await box.registry.create('you@example.com')
+    await box.accountSettings.write(made.id, {
+      ...defaultAccountSettings(),
+      mirrors: [{ name: 'A', root: 'E:\\A', drivePath: 'A', enabled: true }],
+    })
+    await box.tokens.write(made.id, TOKENS)
+    const summaries = await box.registry.list()
+    expect(summaries[0]).toMatchObject({
+      id: made.id, email: 'you@example.com', signedIn: true, mirrorCount: 1, hasNotice: false,
+    })
+  })
+
+  it('makes a new account with an empty world', async () => {
+    const box = await registryBox()
+    const made = await box.registry.create('you@example.com')
+    expect(await box.accountSettings.read(made.id)).toEqual(defaultAccountSettings())
+    expect(await box.tokens.has(made.id)).toBe(false)
+    expect(existsSync(accountDir(box.root, made.id))).toBe(true)
+  })
+
+  it('forgets an account and leaves the others alone', async () => {
+    const box = await registryBox()
+    const a = await box.registry.create('a@example.com')
+    const b = await box.registry.create('b@example.com')
+    await box.tokens.write(b.id, TOKENS)
+    await box.registry.forget(a.id)
+    expect(existsSync(accountDir(box.root, a.id))).toBe(false)
+    expect(existsSync(accountDir(box.root, b.id))).toBe(true)
+    expect(await box.tokens.has(b.id)).toBe(true)
+    expect((await box.registry.list()).map((x) => x.email)).toEqual(['b@example.com'])
+  })
+
+  it('moves the current account and can clear it', async () => {
+    const box = await registryBox()
+    const a = await box.registry.create('a@example.com')
+    const b = await box.registry.create('b@example.com')
+    await box.registry.setCurrent(a.id)
+    expect((await box.appSettings.read()).currentAccountId).toBe(a.id)
+    await box.registry.setCurrent(b.id)
+    expect((await box.appSettings.read()).currentAccountId).toBe(b.id)
+    await box.registry.setCurrent(null)
+    expect((await box.appSettings.read()).currentAccountId).toBeNull()
+  })
+
+  it('signs an account back in, and everything it knew comes back with it', async () => {
+    const box = await registryBox()
+    const first = await box.registry.signIn('you@example.com', TOKENS)
+    await box.accountSettings.write(first.id, {
+      ...defaultAccountSettings(),
+      mirrors: [{ name: 'Medicine', root: 'E:\\Medicine', drivePath: 'Archive/Medicine', enabled: true }],
+    })
+    // The sign-in goes, and comes back with the same address.
+    await box.tokens.clear(first.id)
+    const again = await box.registry.signIn('YOU@example.com', TOKENS)
+    expect(again.id).toBe(first.id)
+    const settings = await box.accountSettings.read(again.id)
+    expect(settings.mirrors).toHaveLength(1)
+    expect(settings.mirrors[0]?.name).toBe('Medicine')
+    expect((await box.registry.list())).toHaveLength(1)
+  })
+
+  it('makes a new account for an address it has never seen', async () => {
+    const box = await registryBox()
+    await box.registry.signIn('you@example.com', TOKENS)
+    const other = await box.registry.signIn('other@example.com', TOKENS)
+    expect((await box.registry.list()).map((x) => x.email)).toEqual([
+      'you@example.com',
+      'other@example.com',
+    ])
+    expect(other.id).not.toBe('')
   })
 })
