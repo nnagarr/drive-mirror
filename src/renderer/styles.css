@@ -101,7 +101,106 @@ body {
   letter-spacing: 0.1px;
 }
 
-.topbar__account {
+/* --- the account switcher ------------------------------------------- */
+
+.switcher {
+  position: relative;
+}
+
+.switcher__button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.switcher__button:hover {
+  border-color: var(--accent);
+}
+
+.switcher__current {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.switcher__caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--text-dim);
+}
+
+.switcher__list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 300px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.switcher__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.switcher__item:hover {
+  background: var(--surface-2);
+}
+
+.switcher__item--current {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.switcher__item--danger {
+  color: #b3261e;
+}
+
+.switcher__email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.switcher__meta {
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.switcher__divider {
+  height: 1px;
+  margin: 6px 2px;
+  background: var(--line);
+}
+
+.switcher__empty {
+  margin: 6px 8px;
   color: var(--text-dim);
   font-size: 12.5px;
 }

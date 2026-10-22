@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { JSX } from 'react'
+import { AccountSwitcher } from './components/AccountSwitcher'
 import { AddMirrorDialog } from './components/AddMirrorDialog'
 import { FolderCard } from './components/FolderCard'
 import { GuardBanner } from './components/GuardBanner'
@@ -231,17 +232,64 @@ export function App(): JSX.Element {
   const running = state?.running ?? false
   const mirrors = state?.mirrors ?? []
 
+  /**
+   * Show a different account.
+   *
+   * Everything on screen changes with it: the folders, the schedule and
+   * the note the other account left behind.
+   */
+  const switchAccount = useCallback(
+    async (id: string) => {
+      await window.driveMirror.switchAccount(id)
+      await refresh()
+    },
+    [refresh],
+  )
+
+  /** Sign in, and make a new account if the address is new. */
+  const connectAccount = useCallback(async () => {
+    setError(null)
+    const result = await window.driveMirror.authenticate()
+    if (!result.ok) {
+      setError('The sign-in did not finish. Nothing was changed.')
+      return
+    }
+    await refresh()
+  }, [refresh])
+
+  /**
+   * Forget an account.
+   *
+   * The account's folder goes, and so does its scheduled task. The copies
+   * of its manifest in the backup folders stay, so the file list can be
+   * recovered by hand.
+   */
+  const forgetAccount = useCallback(
+    async (id: string) => {
+      const account = settings?.accounts.find((a) => a.id === id)
+      const what = account ? `the account ${account.email}` : 'this account'
+      if (!window.confirm(`Forget ${what}? Its folders and its history are deleted. The copies of its manifest in the backup folders are kept.`)) {
+        return
+      }
+      await window.driveMirror.forgetAccount(id)
+      await refresh()
+    },
+    [refresh, settings],
+  )
+
   return (
     <div className="app">
       <header className="topbar">
         <div className="topbar__brand">
           {icon && <img className="topbar__icon" src={icon} alt="" />}
           <h1 className="topbar__title">Drive Mirror</h1>
-          <span className="topbar__account">
-            {state?.needsAuth
-              ? 'Not signed in'
-              : (state?.accountEmail ?? 'Signed in')}
-          </span>
+          <AccountSwitcher
+            accounts={settings?.accounts ?? []}
+            currentAccountId={settings?.currentAccountId ?? null}
+            onSwitch={(id) => void switchAccount(id)}
+            onConnect={() => void connectAccount()}
+            onForget={(id) => void forgetAccount(id)}
+          />
         </div>
         <div className="topbar__actions">
           <button
@@ -311,11 +359,24 @@ export function App(): JSX.Element {
 
         {mirrors.length === 0 && (
           <section className="empty">
-            <h2>Nothing is mirrored yet</h2>
-            <p>
-              Press <strong>Add a folder</strong> to mirror a folder on this computer up
-              to your Google Drive. Nothing is uploaded until you ask for it.
-            </p>
+            <h2>
+              {(settings?.accounts.length ?? 0) === 0
+                ? 'No Google account is connected'
+                : 'Nothing is mirrored yet'}
+            </h2>
+            {(settings?.accounts.length ?? 0) === 0 ? (
+              <p>
+                The app needs a Google account before it can do anything.{' '}
+                <button type="button" className="link" onClick={() => void connectAccount()}>
+                  Connect one
+                </button>
+              </p>
+            ) : (
+              <p>
+                Press <strong>Add a folder</strong> to mirror a folder on this computer up
+                to your Google Drive. Nothing is uploaded until you ask for it.
+              </p>
+            )}
             {!settings?.clientId && (
               <p>
                 You will need a Google client id and secret before the app can do
