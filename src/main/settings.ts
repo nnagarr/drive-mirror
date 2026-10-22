@@ -284,7 +284,7 @@ function withDefaults(defaults: Settings, parsed: unknown): Settings {
  * of the wrong kind is ignored: a hand-edited file must not hand the app
  * settings it cannot use.
  */
-function mergeValue<T>(fallback: T, value: unknown): T {
+export function mergeValue<T>(fallback: T, value: unknown): T {
   if (value === undefined) return fallback
   // A nullable field takes what the file says, including null.
   if (fallback === null) return value as T
