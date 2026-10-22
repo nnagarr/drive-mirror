@@ -803,6 +803,45 @@ or one of the author's folders still holds, and the migration is generic.
 - The exact verification performed on the copied files during the migration.
 - How the "waiting for the other account's sync to finish" state is drawn.
 
+## 12. Amendment A5 - what the review found, and what it changed
+
+**On 2026-10-22, after the work was done, the whole branch was reviewed.**
+Three defects came out of it, and two of them would have broken the feature
+this document describes.
+
+**A5.1 - The account being run, not the account on screen.** The guard and
+the backup writer asked the app's settings which account was on screen, and
+used that address as the account being run. So the second account's first run
+stamped the first account's address on its own manifest, and from then on
+every one of its runs was blocked with *"this manifest belongs to somebody
+else"*. Its manifest backup was written into the first account's backup
+folder as well. The running account carries its own address, and that is
+what the guard and the backups use now.
+
+**A5.2 - The test harness was hiding it.** The harness gave every account
+the same address, so the guard could never tell two accounts apart and the
+tests passed for the wrong reason. Each account has its own address now, and
+the tests assert each manifest's owner and each backup's folder.
+
+**A5.3 - The migration was not resumable.** The marker was written last,
+after the old files had been moved aside. A failure in between deleted the
+account folder - manifest and all - and left the manifest in the legacy
+folder, where the app would never read it again. The marker now comes
+**before** anything is moved aside, so a failure leaves the old files where
+they were, and the tidying-up afterwards cannot undo the migration.
+
+Two smaller things came out of the same review and are now true:
+
+- **A call that names no account is refused**, at the interface's edge. An
+  empty account id would have made "forget this account" delete the whole
+  accounts folder, because `path.join` drops an empty segment. The path
+  refuses an empty id, and the interface refuses a call that names no
+  account or one the app does not know.
+- **A slot that was missed is retried** as soon as the lock is free, rather
+  than waiting a whole period for the next one.
+
+---
+
 ## 11. Risks the user was told about
 
 - **"Forget this account" cannot be undone.** The app's memory of which files
