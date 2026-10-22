@@ -16,6 +16,8 @@ export interface LogEvent {
   level: 'info' | 'warn' | 'error'
   message: string
   relPath?: string
+  /** The account the event came from, when it came from one. */
+  account?: string
 }
 
 /** A logger writing to `<dir>/app.log`. */

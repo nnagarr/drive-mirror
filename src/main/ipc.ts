@@ -76,12 +76,12 @@ export interface AppState {
 
 /** Everything the app tells the interface. */
 export type AppEvent =
-  | { type: 'state'; state: AppState }
-  | { type: 'progress'; mirror: string; relPath: string; phase: string; done: number; total: number }
-  | { type: 'finished'; summary: RunSummary }
-  | { type: 'guard'; mirror: string; reason: string; message: string; canOverride: boolean }
-  | { type: 'notice'; message: string }
-  | { type: 'error'; message: string }
+  | { type: 'state'; accountId: string; state: AppState }
+  | { type: 'progress'; accountId: string; mirror: string; relPath: string; phase: string; done: number; total: number }
+  | { type: 'finished'; accountId: string; summary: RunSummary }
+  | { type: 'guard'; accountId: string; mirror: string; reason: string; message: string; canOverride: boolean }
+  | { type: 'notice'; accountId: string | null; message: string }
+  | { type: 'error'; accountId: string | null; message: string }
 
 /** What the handlers need from the app. */
 export interface IpcDeps {

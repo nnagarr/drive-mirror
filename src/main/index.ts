@@ -55,6 +55,7 @@ function emit(event: AppEvent): void {
           ? `guard: ${event.mirror}: ${event.reason}: ${event.message}`
           : `${event.type}${'mirror' in event ? `: ${event.mirror}` : ''}`,
     relPath: 'relPath' in event ? event.relPath : undefined,
+    account: event.accountId ?? undefined,
   })
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(EVENT_CHANNEL, event)
@@ -295,6 +296,7 @@ async function authenticate(): Promise<{ ok: boolean; email?: string }> {
   } catch (err) {
     emit({
       type: 'error',
+      accountId: null,
       message: err instanceof Error ? err.message : String(err),
     })
     return { ok: false }
@@ -592,7 +594,7 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath })
       },
       onError: (message: string) => {
-        emit({ type: 'error', message })
+        emit({ type: 'error', accountId: null, message })
       },
     })
 

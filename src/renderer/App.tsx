@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { AccountSwitcher } from './components/AccountSwitcher'
 import { AddMirrorDialog } from './components/AddMirrorDialog'
@@ -55,6 +55,14 @@ export function App(): JSX.Element {
   const [wizardOpen, setWizardOpen] = useState(false)
   /** The app's icon, shown next to the title. */
   const [icon, setIcon] = useState('')
+  /**
+   * The account on screen, for the event listener.
+   *
+   * The listener is set up once, so it cannot see the account through a
+   * closed-over value that has gone stale. A ref always holds the latest
+   * one.
+   */
+  const currentAccountRef = useRef<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -72,6 +80,11 @@ export function App(): JSX.Element {
     }
 
     const off = api.onEvent((event: AppEvent) => {
+      // An event from another account is not about what is on screen. A
+      // scheduled run of another account happens in the background, and it
+      // must not paint over this one's folders.
+      const current = currentAccountRef.current
+      if (event.accountId !== null && event.accountId !== current) return
       switch (event.type) {
         case 'state':
           setState(event.state)
@@ -231,6 +244,7 @@ export function App(): JSX.Element {
 
   const running = state?.running ?? false
   const mirrors = state?.mirrors ?? []
+  currentAccountRef.current = settings?.currentAccountId ?? null
 
   /**
    * Show a different account.

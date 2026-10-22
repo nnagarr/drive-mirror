@@ -27,6 +27,9 @@ and the app never guesses which one it means.
 - **It never keeps a copy of your files.** Nothing is stored locally: a file
   that changes is replaced on Drive, and a file that is deleted goes to the
   Drive Trash. The app holds no second copy of anything.
+- **It never mixes two Google accounts.** Each account has its own folders,
+  its own schedule and its own file list, and one account's sign-in is never
+  used with another account's manifest.
 
 > **Replacing a file is not reversible.** Drive keeps no history for ordinary
 > files, so the version that was on Drive before is gone once the new one
@@ -68,6 +71,10 @@ get a client id and secret?**
 The client secret is entered into the app and stored encrypted with DPAPI on
 this machine. **It is never written to the repository, and never leaves your
 computer** except to reach Google's token endpoint, which is what it is for.
+
+**You only do this once.** The client id identifies the app, not the person,
+so every Google account you connect uses the same one. A second account
+costs a sign-in, not another trip to the console.
 
 ## Using it
 
@@ -126,35 +133,53 @@ A guard that stops a tree keeps the tree's old file counts, so the next run
 stops on the same evidence. Only a run that completed - including one you
 chose with **Sync anyway** - updates them.
 
-## Changing the Google account
+## More than one Google account
 
-**Settings > The Google connection** has two buttons:
+The app can hold several Google accounts at once. **An account is a separate
+world**: its own folders, its own schedule, its own file list, its own
+sign-in. The account on screen is chosen from the dropdown in the top bar,
+and everything you see belongs to it.
 
-- **Sign out of Google** forgets the sign-in and nothing else. The client id
-  and secret stay, so signing in again is one click.
-- **Reset the connection** forgets the sign-in, the client id and the secret.
+- **Connect another account** (in the dropdown, or **Connect an account** in
+  Settings) signs in to a second Google account. An address the app has seen
+  before is signed back in, with everything it knew; a new address makes a
+  new account.
+- **Sign out of this account** forgets the sign-in and nothing else. The
+  folders, the schedule and the file list stay, so signing back in restores
+  the account exactly as it was.
+- **Forget this account** deletes the account's folder and its scheduled
+  task, for good. The copies of its manifest in the backup folders are
+  kept, so the file list can be recovered by hand. The files already on
+  Drive are not touched.
+- **Reset the connection** (Settings) signs every account out and forgets
+  the client id and the secret. Every manifest, folder list and schedule
+  stays.
 
-Neither one touches your manifest, your mirrors, your schedule or your
-backups. The manifest belongs to the Google account that made it, so if you
-sign in as somebody else the app stops and names both accounts rather than
-quietly producing a broken mirror.
+The same folder can be mirrored into two accounts. They are then two
+separate mirrors with two separate file lists, and a file deleted on the
+disk is trashed on both Drives.
+
+Two accounts never sync at the same time: one waits for the other, and
+nothing is dropped. A run that is finally given up on says so, and its
+slot is caught up at the next tick rather than lost.
 
 ## Where things are kept
 
 | What | Where |
 | --- | --- |
-| Manifest | `%LOCALAPPDATA%\DriveMirror\manifest.json` |
-| Backups of the manifest | `%LOCALAPPDATA%\DriveMirror\backups\` and any extra copy you name |
+| An account's folder | `%LOCALAPPDATA%\DriveMirror\accounts\<id>\` |
+| An account's manifest | `%LOCALAPPDATA%\DriveMirror\accounts\<id>\manifest.json` |
+| An account's sign-in | `%LOCALAPPDATA%\DriveMirror\accounts\<id>\tokens.json` |
+| Backups of the manifests | `%LOCALAPPDATA%\DriveMirror\backups\<address>\` and any extra copy you name |
 | Logs | `%LOCALAPPDATA%\DriveMirror\logs\app.log` |
 | Encrypted credentials | `%LOCALAPPDATA%\DriveMirror\credentials.json` |
+| The layout from before accounts existed | `%LOCALAPPDATA%\DriveMirror\legacy\` |
 
 The manifest is the app's memory: it records every file it has synced, with
 its content hash, and every file it has stopped tracking. **It is never
 pruned**, because dropping a record would resurrect a file you deleted. The
 one exception is a mirror you removed: thirty days later the app forgets that
-mirror's history entirely, retired records and all. The superseded copies on
-disk are left alone - they are the only local copies of the bytes the app
-replaced, and you prune them yourself.
+mirror's history entirely, retired records and all.
 
 A backup copy that cannot be written never fails a sync. It is reported
 instead, because a safety net that quietly stops being refreshed is worse

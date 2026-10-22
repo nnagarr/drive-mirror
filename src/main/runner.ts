@@ -352,6 +352,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         const manifest = account ? await account.store.read() : emptyManifest()
         deps.emit({
           type: 'state',
+          accountId,
           state: buildState(accountId, account, settings, manifest),
         })
       } catch {
@@ -536,6 +537,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       onProgress: (event) => {
         deps.emit({
           type: 'progress',
+          accountId,
           mirror: config.name,
           relPath: event.relPath,
           phase: event.phase,
@@ -608,6 +610,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     reports.push({ code: 'anomaly', relPath: '', message })
     deps.emit({
       type: 'guard',
+      accountId,
       mirror: name,
       reason,
       message,
@@ -693,7 +696,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         const message =
           `this manifest belongs to ${owner}, but you are signed in as ${signedIn}. ` +
           'Start a new manifest for this account before syncing.'
-        deps.emit({ type: 'error', message })
+        deps.emit({ type: 'error', accountId, message })
         note(deps.log, message)
         summary.errors = 1
         summary.reports.push({ code: 'anomaly', relPath: '', message })
@@ -731,6 +734,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         // refreshed, and the user has to know that.
         deps.emit({
           type: 'notice',
+          accountId,
           message: `the backup copy at ${path} could not be written, so the manifest has no safety net there`,
         })
       }
@@ -744,7 +748,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
 
       stateFor(accountId).lastRun = summary
-      deps.emit({ type: 'finished', summary })
+      deps.emit({ type: 'finished', accountId, summary })
       return summary
     } finally {
       // Whatever happened, the app is not syncing any more and the lock

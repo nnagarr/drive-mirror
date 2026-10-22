@@ -599,6 +599,21 @@ the app was first built for.
 
 ---
 
+## 16. Amendment A4 - several Google accounts at once
+
+**Decided on 2026-10-22.** The constraint "Multiple Google accounts at once.
+One account per app, always." no longer holds. The app holds several
+accounts, each a separate world: its own folders, its own schedule, its own
+file list, its own sign-in and its own manifest.
+
+The design, and the two things the user was told it costs, are in
+`2026-10-22-drive-mirror-multi-account-design.md`. The rulings, with their
+costs, are in `../decisions/2026-10-21-v2-rulings.md`.
+
+What does not change: the engine stays account-free. It is handed one
+account's work at a time and knows nothing about the others, so the rules
+that decide which file wins are the same rules they always were.
+
 ## 13. Open risk the user was told about
 
 The 30-day pruning (D11) is the one decision that trades a safety property for tidiness. If the user would rather keep every removed mirror's history forever, that is a one-line change in §7.4 and nothing else in this spec depends on it.

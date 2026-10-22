@@ -46,6 +46,15 @@ continued. When you add a rule, keep that promise.
 > a replacement, and that is a decision, not an oversight — see the v2
 > design, section 8, amendment A2.
 
+## The second rule
+
+**The app must never mix two Google accounts.** A file id in one account's
+manifest means nothing in another account's Drive, so an account's file list,
+its sign-in, its schedule and its history belong to that account and to no
+other. Every rule that touches a file, a folder or a mirror names the
+account it belongs to, and the core stays account-free: it is handed one
+account's work at a time and knows nothing about the others.
+
 ## The rules the code holds to
 
 These are the ones a change can break without any test going red, so they are
