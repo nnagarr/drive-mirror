@@ -2,18 +2,30 @@ import { describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSettingsStore, defaultSettings } from '../src/main/settings'
+import { createSettingsStore, defaultAppSettings } from '../src/main/settings'
+import type { AccountSummary } from '../src/main/settings'
+
+const ACCOUNT: AccountSummary = {
+  id: 'acc_7f3a2b',
+  email: 'you@example.com',
+  addedAt: '2026-10-22T00:00:00.000Z',
+  signedIn: true,
+  mirrorCount: 4,
+  hasNotice: false,
+}
 
 describe('the settings store', () => {
   it('returns the defaults when there is no file', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
     const store = createSettingsStore(join(dir, 'settings.json'))
     const s = await store.read()
-    expect(s.mirrors).toEqual([])
-    expect(s.schedule.enabled).toBe(false)
-    expect(s.schedule.mechanism).toBe('in-app')
-    expect(s.backupPaths.length).toBeGreaterThan(0)
+    expect(s.accounts).toEqual([])
+    expect(s.currentAccountId).toBeNull()
+    expect(s.clientId).toBe('')
+    expect(s.clientSecretSet).toBe(false)
+    expect(s.guardThreshold).toBe(5)
     expect(s.startWithWindows).toBe(false)
+    expect(s.extraBackupPath).toBeNull()
     expect(s.pendingNotice).toBeNull()
   })
 
@@ -21,40 +33,43 @@ describe('the settings store', () => {
     const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
     const file = join(dir, 'settings.json')
     const store = createSettingsStore(file)
-    const s = defaultSettings()
-    s.mirrors = [{ name: 'Docs', root: 'D:\\Docs', drivePath: 'Docs', enabled: true }]
-    s.schedule = {
-      enabled: true,
-      shape: { kind: 'daily', at: '02:00' },
-      mechanism: 'in-app',
-      lastRunAt: null,
-      nextRunAt: null,
-    }
+    const s = defaultAppSettings()
+    s.accounts = [ACCOUNT]
+    s.currentAccountId = ACCOUNT.id
+    s.extraBackupPath = 'E:\\.drive-mirror-backup'
+    s.guardThreshold = 9
+    s.startWithWindows = true
+    s.clientSecretSet = true
     await store.write(s)
     const back = await store.read()
-    expect(back.mirrors).toEqual(s.mirrors)
-    expect(back.schedule).toEqual(s.schedule)
+    expect(back.accounts).toHaveLength(1)
+    expect(back.accounts[0]?.email).toBe('you@example.com')
+    expect(back.currentAccountId).toBe(ACCOUNT.id)
+    expect(back.extraBackupPath).toBe('E:\\.drive-mirror-backup')
+    expect(back.guardThreshold).toBe(9)
+    expect(back.startWithWindows).toBe(true)
+    expect(back.clientSecretSet).toBe(true)
   })
 
   it('merges a patch without losing the fields it does not mention', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
     const store = createSettingsStore(join(dir, 'settings.json'))
-    const s = defaultSettings()
-    s.mirrors = [{ name: 'Docs', root: 'D:\\Docs', drivePath: 'Docs', enabled: true }]
+    const s = defaultAppSettings()
+    s.accounts = [ACCOUNT]
     await store.write(s)
     const next = await store.patch({ startWithWindows: true })
     expect(next.startWithWindows).toBe(true)
-    expect(next.mirrors).toHaveLength(1)
+    expect(next.accounts).toHaveLength(1)
   })
 
   it('writes atomically, so a half-written file is never left behind', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
     const file = join(dir, 'settings.json')
     const store = createSettingsStore(file)
-    await store.write(defaultSettings())
+    await store.write(defaultAppSettings())
     const text = await readFile(file, 'utf8')
     expect(text.endsWith('\n')).toBe(false)
-    expect(JSON.parse(text).guardThreshold).toBe(defaultSettings().guardThreshold)
+    expect(JSON.parse(text).guardThreshold).toBe(defaultAppSettings().guardThreshold)
     // The file was renamed into place, so the temporary one is gone.
     await expect(stat(`${file}.tmp`)).rejects.toThrow()
   })
@@ -65,41 +80,41 @@ describe('the settings store', () => {
     await writeFile(file, '{ not json', 'utf8')
     const store = createSettingsStore(file)
     const s = await store.read()
-    expect(s.guardThreshold).toBe(defaultSettings().guardThreshold)
-  })
-
-  it('keeps the old backup path when the settings file is upgraded', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
-    const file = join(dir, 'settings.json')
-    await writeFile(file, JSON.stringify({ backupPath: 'E:\\.drive-mirror-backup\\' }), 'utf8')
-    const s = await createSettingsStore(file).read()
-    expect(s.backupPaths).toContain('E:\\.drive-mirror-backup\\')
-    expect(s.backupPaths[0]).toContain('backups')
+    expect(s.guardThreshold).toBe(defaultAppSettings().guardThreshold)
   })
 
   it('never writes the client id to the file', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
     const file = join(dir, 'settings.json')
     const store = createSettingsStore(file)
-    await store.write({ ...defaultSettings(), clientId: 'CID' })
+    await store.write({ ...defaultAppSettings(), clientId: 'CID' })
     const onDisk = await readFile(file, 'utf8')
     expect(onDisk).not.toContain('CID')
     expect((await store.read()).clientId).toBe('')
   })
 
-  it('keeps a half-written schedule whole', async () => {
+  it('drops the keys it does not know, so an old file loads without complaint', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
     const file = join(dir, 'settings.json')
     await writeFile(
       file,
-      JSON.stringify({ schedule: { enabled: true, shape: { kind: 'daily', at: '02:00' } } }),
+      JSON.stringify({ mirrors: [{ name: 'Docs' }], schedule: { enabled: true }, backupPaths: ['E:\\x'] }),
       'utf8',
     )
     const s = await createSettingsStore(file).read()
-    expect(s.schedule.enabled).toBe(true)
-    expect(s.schedule.shape).toEqual({ kind: 'daily', at: '02:00' })
-    // The fields the file did not mention keep their defaults.
-    expect(s.schedule.mechanism).toBe('in-app')
+    expect(Object.keys(s)).not.toContain('mirrors')
+    expect(Object.keys(s)).not.toContain('schedule')
+    expect(Object.keys(s)).not.toContain('backupPaths')
+    expect(s.accounts).toEqual([])
+  })
+
+  it('writes only the record of an account, never its derived state', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
+    const file = join(dir, 'settings.json')
+    const store = createSettingsStore(file)
+    await store.write({ ...defaultAppSettings(), accounts: [ACCOUNT] })
+    const onDisk = JSON.parse(await readFile(file, 'utf8'))
+    expect(Object.keys(onDisk.accounts[0]).sort()).toEqual(['addedAt', 'email', 'id'])
   })
 
   it('ignores a field of the wrong kind', async () => {
@@ -107,11 +122,12 @@ describe('the settings store', () => {
     const file = join(dir, 'settings.json')
     await writeFile(
       file,
-      JSON.stringify({ mirrors: 'not a list', guardThreshold: 'many' }),
+      JSON.stringify({ accounts: 'not a list', guardThreshold: 'many', currentAccountId: 42 }),
       'utf8',
     )
     const s = await createSettingsStore(file).read()
-    expect(s.mirrors).toEqual([])
-    expect(s.guardThreshold).toBe(defaultSettings().guardThreshold)
+    expect(s.accounts).toEqual([])
+    expect(s.guardThreshold).toBe(defaultAppSettings().guardThreshold)
+    expect(s.currentAccountId).toBeNull()
   })
 })

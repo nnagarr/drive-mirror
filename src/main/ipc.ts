@@ -12,7 +12,8 @@ import { validateMirror } from '../core/mirrorConfig'
 import { isValidShape } from '../core/schedule'
 import type { Report } from '../core/types'
 import type { Runner } from './runner'
-import type { ScheduleConfig, Settings } from './settings'
+import type { AppSettings, ScheduleConfig } from './settings'
+import type { AccountSettings } from './accountSettings'
 
 /** What the interface shows for one mirror. */
 export interface MirrorCard {
@@ -77,8 +78,12 @@ export type AppEvent =
 /** What the handlers need from the app. */
 export interface IpcDeps {
   runner: Runner
-  getSettings(): Promise<Settings>
-  saveSettings(patch: Partial<Settings>): Promise<Settings>
+  getSettings(): Promise<AppSettings>
+  /** The current account's settings: its mirrors, its schedule, its notice. */
+  getAccountSettings(): Promise<AccountSettings>
+  /** Save part of the current account's settings. */
+  saveAccountSettings(patch: Partial<AccountSettings>): Promise<AccountSettings>
+  saveSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   setCredentials(clientId: string, clientSecret: string): Promise<{ ok: boolean }>
   authenticate(): Promise<{ ok: boolean; email?: string }>
   signOut(): Promise<void>
@@ -146,9 +151,19 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle('drive-mirror:get-settings', () => deps.getSettings())
 
+  ipcMain.handle('drive-mirror:get-account-settings', () => deps.getAccountSettings())
+
+  ipcMain.handle(
+    'drive-mirror:save-account-settings',
+    async (_event, patch: Partial<AccountSettings>) => {
+      const next = await deps.saveAccountSettings(patch)
+      return next
+    },
+  )
+
   ipcMain.handle(
     'drive-mirror:save-settings',
-    async (_event, patch: Partial<Settings>) => {
+    async (_event, patch: Partial<AppSettings>) => {
       const next = await deps.saveSettings(patch)
       if (patch.startWithWindows !== undefined) {
         deps.applyAutoLaunch(patch.startWithWindows)
@@ -178,7 +193,7 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(
     'drive-mirror:add-mirror',
     async (_event, config: { name: string; root: string; drivePath: string }) => {
-      const settings = await deps.getSettings()
+      const settings = await deps.getAccountSettings()
       const problems = validateMirror(config, settings.mirrors)
       if (problems.length > 0) {
         return { ok: false, message: problems.map((p) => p.message).join(' ') }
@@ -190,7 +205,7 @@ export function registerIpc(deps: IpcDeps): void {
         (m) =>
           !(m.removedAt && m.name.toLowerCase() === config.name.toLowerCase()),
       )
-      await deps.saveSettings({
+      await deps.saveAccountSettings({
         mirrors: [...kept, { ...config, enabled: true }],
       })
       return { ok: true }
@@ -200,7 +215,7 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(
     'drive-mirror:update-mirror',
     async (_event, config: { name: string; drivePath: string }) => {
-      const settings = await deps.getSettings()
+      const settings = await deps.getAccountSettings()
       const existing = settings.mirrors.find((m) => m.name === config.name)
       if (!existing) {
         return { ok: false, message: `There is no mirror called ${config.name}.` }
@@ -217,7 +232,7 @@ export function registerIpc(deps: IpcDeps): void {
         const moved = await deps.runner.moveMirrorDestination(existing.name, config.drivePath)
         if (!moved.ok) return moved
       }
-      await deps.saveSettings({
+      await deps.saveAccountSettings({
         mirrors: settings.mirrors.map((m) =>
           m.name === existing.name ? { ...m, drivePath: config.drivePath } : m,
         ),
@@ -227,8 +242,8 @@ export function registerIpc(deps: IpcDeps): void {
   )
 
   ipcMain.handle('drive-mirror:remove-mirror', async (_event, name: string) => {
-    const settings = await deps.getSettings()
-    await deps.saveSettings({
+    const settings = await deps.getAccountSettings()
+    await deps.saveAccountSettings({
       mirrors: settings.mirrors.map((m) =>
         m.name === name
           ? { ...m, removedAt: new Date().toISOString(), enabled: false }
@@ -241,8 +256,8 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(
     'drive-mirror:set-mirror-enabled',
     async (_event, name: string, enabled: boolean) => {
-      const settings = await deps.getSettings()
-      await deps.saveSettings({
+      const settings = await deps.getAccountSettings()
+      await deps.saveAccountSettings({
         mirrors: settings.mirrors.map((m) => (m.name === name ? { ...m, enabled } : m)),
       })
       return { ok: true }
@@ -250,21 +265,21 @@ export function registerIpc(deps: IpcDeps): void {
   )
 
   ipcMain.handle('drive-mirror:get-schedule', async () => {
-    const settings = await deps.getSettings()
+    const settings = await deps.getAccountSettings()
     return settings.schedule
   })
 
   ipcMain.handle(
     'drive-mirror:save-schedule',
     async (_event, patch: Partial<ScheduleConfig>) => {
-      const settings = await deps.getSettings()
+      const settings = await deps.getAccountSettings()
       if (patch.shape && !isValidShape(patch.shape)) {
         throw new Error('that schedule cannot be run')
       }
       // The schedule is merged, not replaced: a change to one part of it
       // must not wipe the rest.
       const next = { ...settings.schedule, ...patch }
-      await deps.saveSettings({ schedule: next })
+      await deps.saveAccountSettings({ schedule: next })
       // The app has to act on the change now, not at the next start-up.
       await deps.applySchedule()
       return next

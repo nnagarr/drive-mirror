@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
 import { SchedulePanel } from './SchedulePanel'
-import type { ScheduleConfig, Settings } from '../../main/settings'
+import type { AppSettings, ScheduleConfig } from '../../main/settings'
+import type { AccountSettings } from '../../main/accountSettings'
 
 export interface SettingsDialogProps {
-  settings: Settings
+  settings: AppSettings
+  /** The current account's settings: its schedule and its notice. */
+  accountSettings: AccountSettings
   onClose: () => void
   /** Open the guide to getting a Google client id and secret. */
   onShowSetup: () => void
@@ -26,6 +29,7 @@ export interface SettingsDialogProps {
  */
 export function SettingsDialog({
   settings,
+  accountSettings,
   onClose,
   onShowSetup,
   onScheduleChange,
@@ -187,7 +191,7 @@ export function SettingsDialog({
         </section>
 
         <SchedulePanel
-          schedule={settings.schedule}
+          schedule={accountSettings.schedule}
           onSave={onScheduleChange}
           onRunNow={onSyncNow}
         />
@@ -244,12 +248,8 @@ export function SettingsDialog({
           <h3>Where things are kept</h3>
           <dl className="field__paths">
             <div>
-              <dt>Manifest</dt>
-              <dd>{settings.manifestPath}</dd>
-            </div>
-            <div>
-              <dt>Backups of the manifest</dt>
-              <dd>{settings.backupPaths.join(', ')}</dd>
+              <dt>Extra copy of the manifest</dt>
+              <dd>{settings.extraBackupPath ?? 'none'}</dd>
             </div>
           </dl>
         </section>

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { appDataDir, defaultSettings } from '../src/main/settings'
+import { appDataDir, defaultAppSettings } from '../src/main/settings'
+import { defaultAccountSettings } from '../src/main/accountSettings'
+import { accountsDir, appBackupDir } from '../src/main/accountPaths'
 import { emptyManifest } from '../src/core/manifest'
 import { mirrorConfigsFromManifest } from '../src/core/mirrorConfig'
 
@@ -14,7 +16,7 @@ import { mirrorConfigsFromManifest } from '../src/core/mirrorConfig'
  */
 describe('a first install', () => {
   it('starts with no mirrors', () => {
-    expect(defaultSettings().mirrors).toEqual([])
+    expect(defaultAccountSettings().mirrors).toEqual([])
   })
 
   it('finds no mirrors to recover from an empty manifest', () => {
@@ -22,31 +24,38 @@ describe('a first install', () => {
   })
 
   it('starts with no client and no secret', () => {
-    const settings = defaultSettings()
+    const settings = defaultAppSettings()
     expect(settings.clientId).toBe('')
     expect(settings.clientSecretSet).toBe(false)
   })
 
+  it('starts with no account at all', () => {
+    const settings = defaultAppSettings()
+    expect(settings.accounts).toEqual([])
+    expect(settings.currentAccountId).toBeNull()
+  })
+
   it('starts with the schedule switched off', () => {
-    expect(defaultSettings().schedule.enabled).toBe(false)
+    expect(defaultAccountSettings().schedule.enabled).toBe(false)
   })
 
   it('does not start with Windows', () => {
-    expect(defaultSettings().startWithWindows).toBe(false)
+    expect(defaultAppSettings().startWithWindows).toBe(false)
   })
 
   it('starts with nothing to tell the user about', () => {
-    expect(defaultSettings().pendingNotice).toBeNull()
-    expect(defaultSettings().schedule.lastRunAt).toBeNull()
-    expect(defaultSettings().schedule.nextRunAt).toBeNull()
+    expect(defaultAppSettings().pendingNotice).toBeNull()
+    expect(defaultAccountSettings().pendingNotice).toBeNull()
+    expect(defaultAccountSettings().schedule.lastRunAt).toBeNull()
+    expect(defaultAccountSettings().schedule.nextRunAt).toBeNull()
   })
 
   it('keeps everything inside its own data directory', () => {
-    const settings = defaultSettings()
     const dir = appDataDir()
-    for (const path of [settings.manifestPath, ...settings.backupPaths]) {
+    for (const path of [accountsDir(dir), appBackupDir(dir)]) {
       expect(path.startsWith(dir)).toBe(true)
     }
+    expect(defaultAppSettings().extraBackupPath).toBeNull()
   })
 
   it('has nothing of the author in the source', async () => {

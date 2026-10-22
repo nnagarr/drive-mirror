@@ -9,7 +9,8 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { SetupWizard } from './components/SetupWizard'
 import { SummaryBar } from './components/SummaryBar'
 import type { AppEvent, AppState, RunSummary } from '../main/ipc'
-import type { Settings } from '../main/settings'
+import type { AppSettings } from '../main/settings'
+import type { AccountSettings } from '../main/accountSettings'
 
 /** The guard the banner is showing. */
 interface GuardInfo {
@@ -36,7 +37,8 @@ interface ProgressInfo {
  */
 export function App(): JSX.Element {
   const [state, setState] = useState<AppState | null>(null)
-  const [settings, setSettings] = useState<Settings | null>(null)
+  const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [accountSettings, setAccountSettings] = useState<AccountSettings | null>(null)
   const [guard, setGuard] = useState<GuardInfo | null>(null)
   const [progress, setProgress] = useState<ProgressInfo | null>(null)
   const [summary, setSummary] = useState<RunSummary | null>(null)
@@ -123,11 +125,21 @@ export function App(): JSX.Element {
           // the guide to getting one is the first thing a new user sees.
           setWizardOpen(true)
         }
+      })
+      .catch(() => undefined)
+
+    // The account's own settings: its schedule, and the note left by a
+    // run the user did not watch.
+    void api
+      .getAccountSettings()
+      .then((loaded) => {
+        setAccountSettings(loaded)
         // A problem that happened while nobody was watching is waiting in
-        // the settings. It is shown once, and then it is cleared.
+        // the account's settings. It is shown once, and then it is
+        // cleared.
         if (loaded.pendingNotice) {
           setNotice(loaded.pendingNotice.message)
-          void api.saveSettings({ pendingNotice: null })
+          void api.saveAccountSettings({ pendingNotice: null })
         }
       })
       .catch(() => undefined)
@@ -364,9 +376,10 @@ export function App(): JSX.Element {
         />
       )}
 
-      {settingsOpen && settings && (
+      {settingsOpen && settings && accountSettings && (
         <SettingsDialog
           settings={settings}
+          accountSettings={accountSettings}
           onClose={() => setSettingsOpen(false)}
           onShowSetup={() => {
             setSettingsOpen(false)
@@ -374,7 +387,7 @@ export function App(): JSX.Element {
           }}
           onScheduleChange={async (patch) => {
             const next = await window.driveMirror.saveSchedule(patch)
-            setSettings((current) =>
+            setAccountSettings((current) =>
               current ? { ...current, schedule: next } : current,
             )
           }}

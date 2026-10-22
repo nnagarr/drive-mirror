@@ -11,11 +11,13 @@ import {
 } from '../src/main/runner'
 import { createManifestStore } from '../src/core/manifest'
 import { FakeDrive } from './helpers/fakeDrive'
-import { defaultSettings } from '../src/main/settings'
+import { defaultAppSettings } from '../src/main/settings'
+import { defaultAccountSettings } from '../src/main/accountSettings'
 import type { AppEvent } from '../src/main/ipc'
 import type { DriveNode, Manifest } from '../src/core/types'
 import type { DriveClient } from '../src/drive/client'
-import type { Settings } from '../src/main/settings'
+import type { AppSettings } from '../src/main/settings'
+import type { AccountSettings } from '../src/main/accountSettings'
 
 /** A mirror folder on the fake Drive. */
 const MIRROR_FOLDER_ID = 'FOLDER_MED'
@@ -29,7 +31,12 @@ interface Harness {
   events: AppEvent[]
   logs: string[]
   store: ReturnType<typeof createManifestStore>
-  settings: Settings
+  /** The account's settings: its mirrors, its schedule. */
+  settings: AccountSettings
+  /** The app's own settings: the list of accounts, the guard threshold. */
+  appSettings: AppSettings
+  /** Where copies of the manifest are kept. */
+  backupPaths: string[]
   manifestFile: string
   /** Where the runner's lock file lives. */
   lockPath: string
@@ -58,13 +65,25 @@ async function harness(
     await store.write(options.manifest)
   }
 
-  const settings: Settings = {
-    ...defaultSettings(),
-    manifestPath: manifestFile,
-    // The backup copy stays inside the test's own directory.
-    backupPaths: [join(dir, 'backup')],
+  const settings: AccountSettings = {
+    ...defaultAccountSettings(),
     // The mirrors are configuration: the settings say what is mirrored.
     mirrors: [{ name: 'Medicine', root, drivePath: 'Medicine', enabled: true }],
+  }
+
+  const appSettings: AppSettings = {
+    ...defaultAppSettings(),
+    accounts: [
+      {
+        id: 'acc_test',
+        email: 'user@example.com',
+        addedAt: '2026-10-22T00:00:00.000Z',
+        signedIn: true,
+        mirrorCount: 1,
+        hasNotice: false,
+      },
+    ],
+    currentAccountId: 'acc_test',
   }
 
   return {
@@ -75,6 +94,8 @@ async function harness(
     logs: [],
     store,
     settings,
+    appSettings,
+    backupPaths: [join(dir, 'backup')],
     manifestFile,
     lockPath: join(dir, 'sync.lock'),
   }
@@ -85,19 +106,31 @@ function runner(
   box: Harness,
   options: {
     client?: DriveClient
-    accountEmail?: () => string | null | Promise<string | null>
-    settings?: () => Promise<Settings>
+    /** The address of the account the app is showing. */
+    email?: string
+    appSettings?: () => Promise<AppSettings>
+    settings?: () => Promise<AccountSettings>
   } = {},
 ) {
+  const appSettings = async (): Promise<AppSettings> => {
+    const base = options.appSettings ? await options.appSettings() : box.appSettings
+    if (!options.email) return base
+    return {
+      ...base,
+      accounts: base.accounts.map((account) => ({ ...account, email: options.email! })),
+    }
+  }
   return createRunner({
-    client: options.client ?? box.client,
-    store: box.store,
+    client: async () => options.client ?? box.client,
+    store: async () => box.store,
     settings: options.settings ?? (async () => box.settings),
+    appSettings,
+    // The backup copy stays inside the test's own directory.
+    backupPaths: async () => box.backupPaths,
     emit: (event) => box.events.push(event),
     log: (message) => box.logs.push(message),
     lockPath: box.lockPath,
     hasCredentials: () => true,
-    accountEmail: options.accountEmail ?? (() => 'user@example.com'),
   })
 }
 
@@ -366,13 +399,15 @@ describe('the sync runner', () => {
 
     await runner(box).syncNow()
 
+    // Each account's copy lives in a folder of its own.
     const written = await readdir(join(box.dir, 'backup'))
-    expect(written).toContain('manifest.json')
+    expect(written).toContain('user@example.com')
+    expect(await readdir(join(box.dir, 'backup', 'user@example.com'))).toContain('manifest.json')
     expect(box.dir).toContain('dm-runner-')
     // Every copy the runner makes is inside the test's own directory. The
     // backup path used to be a hardcoded `E:\.drive-mirror-backup\`, so
     // every test run overwrote the user's own safety net.
-    expect(box.settings.backupPaths.every((p) => p.startsWith(box.dir))).toBe(true)
+    expect(box.backupPaths.every((p) => p.startsWith(box.dir))).toBe(true)
   })
 
   it('does not fail the sync when a backup copy cannot be written', async () => {
@@ -380,7 +415,7 @@ describe('the sync runner', () => {
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
     // A file where the backup folder should be: the copy cannot be made.
     await writeFile(join(box.dir, 'blocker'), 'not a folder')
-    box.settings.backupPaths = [join(box.dir, 'blocker', 'backup')]
+    box.backupPaths = [join(box.dir, 'blocker', 'backup')]
 
     const summary = await runner(box).syncNow()
 
@@ -396,7 +431,7 @@ describe('the sync runner', () => {
   it('does not fail a rebase when a backup copy cannot be written', async () => {
     const box = await harness()
     await writeFile(join(box.dir, 'blocker'), 'not a folder')
-    box.settings.backupPaths = [join(box.dir, 'blocker', 'backup')]
+    box.backupPaths = [join(box.dir, 'blocker', 'backup')]
 
     await expect(runner(box).rebase('Medicine')).resolves.toBeUndefined()
 
@@ -407,12 +442,12 @@ describe('the sync runner', () => {
     const box = await harness()
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
     const second = join(box.dir, 'other-disk')
-    box.settings.backupPaths = [join(box.dir, 'backup'), second]
+    box.backupPaths = [join(box.dir, 'backup'), second]
 
     await runner(box).syncNow()
 
-    expect(await readdir(join(box.dir, 'backup'))).toContain('manifest.json')
-    expect(await readdir(second)).toContain('manifest.json')
+    expect(await readdir(join(box.dir, 'backup'))).toContain('user@example.com')
+    expect(await readdir(second)).toContain('user@example.com')
   })
 
   it('writes the backup as the same bytes as the manifest file', async () => {
@@ -424,7 +459,10 @@ describe('the sync runner', () => {
     // The backup is a copy of the manifest the app just wrote, byte for
     // byte: a hand-diff of the two shows no differences.
     const manifest = await readFile(box.manifestFile, 'utf8')
-    const backup = await readFile(join(box.dir, 'backup', 'manifest.json'), 'utf8')
+    const backup = await readFile(
+      join(box.dir, 'backup', 'user@example.com', 'manifest.json'),
+      'utf8',
+    )
     expect(backup).toBe(manifest)
   })
 
@@ -645,7 +683,7 @@ describe('the manifest and the account that owns it', () => {
     const manifest = await box.store.read()
     manifest.accountEmail = 'someone-else@example.com'
     await box.store.write(manifest)
-    const r = runner(box, { accountEmail: async () => 'me@example.com' })
+    const r = runner(box, { email: 'me@example.com' })
 
     const summary = await r.syncNow()
 
@@ -657,7 +695,7 @@ describe('the manifest and the account that owns it', () => {
 
   it('records the account on the first run and does not block it', async () => {
     const box = await harness()
-    const r = runner(box, { accountEmail: async () => 'me@example.com' })
+    const r = runner(box, { email: 'me@example.com' })
 
     await r.syncNow()
 
@@ -669,7 +707,7 @@ describe('the manifest and the account that owns it', () => {
     const manifest = await box.store.read()
     ;(manifest as { accountEmail: unknown }).accountEmail = 42
     await box.store.write(manifest)
-    const r = runner(box, { accountEmail: async () => 'me@example.com' })
+    const r = runner(box, { email: 'me@example.com' })
 
     const summary = await r.syncNow()
 
@@ -700,7 +738,7 @@ describe('forgetting a mirror the user removed', () => {
       retired: {},
     }
     await box.store.write(manifest)
-    const settings: Settings = {
+    const settings: AccountSettings = {
       ...box.settings,
       mirrors: [
         {

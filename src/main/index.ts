@@ -18,7 +18,13 @@ import { createLogger } from '../core/logger'
 import { createManifestStore, emptyManifest } from '../core/manifest'
 import { mirrorConfigsFromManifest } from '../core/mirrorConfig'
 import { appDataDir, createCredentialStore, createSettingsStore } from './settings'
-import type { Settings } from './settings'
+import type { AppSettings } from './settings'
+import { createAccountSettingsStore, defaultAccountSettings } from './accountSettings'
+import type { AccountSettings } from './accountSettings'
+import { createAccountTokenStore } from './accountTokens'
+import { createAccountRegistry } from './accounts'
+import { migrateToAccounts } from './migrate'
+import { accountDir, accountManifestPath, appBackupDir } from './accountPaths'
 import { registerIpc } from './ipc'
 import { createMainWindow, appIconPath } from './window'
 import { createRunner } from './runner'
@@ -70,30 +76,6 @@ async function rememberNotice(message: string): Promise<void> {
 /* The stored tokens                                                    */
 /* ------------------------------------------------------------------ */
 
-const tokenFile = () => join(appDataDir(), 'tokens.json')
-
-/** Read the stored tokens, if there are any. */
-async function loadTokens(): Promise<OAuthTokens | null> {
-  try {
-    const raw = await readFile(tokenFile(), 'utf8')
-    const stored = JSON.parse(raw) as { payload?: string }
-    if (!stored.payload) return null
-    const plain = safeStorage.decryptString(Buffer.from(stored.payload, 'base64'))
-    return JSON.parse(plain) as OAuthTokens
-  } catch {
-    return null
-  }
-}
-
-/** Store the tokens, encrypted. */
-async function saveTokens(tokens: OAuthTokens): Promise<void> {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('the operating system cannot encrypt the sign-in token')
-  }
-  await mkdir(appDataDir(), { recursive: true })
-  const payload = safeStorage.encryptString(JSON.stringify(tokens)).toString('base64')
-  await writeFile(tokenFile(), JSON.stringify({ payload }), 'utf8')
-}
 
 /* ------------------------------------------------------------------ */
 /* The Drive client                                                     */
@@ -106,9 +88,23 @@ const credentialStore = createCredentialStore(
 
 const settingsStore = createSettingsStore(join(appDataDir(), 'settings.json'))
 
+const accountSettingsStore = createAccountSettingsStore(appDataDir())
+
+const accountTokenStore = createAccountTokenStore(appDataDir(), safeStorage)
+
+const accountRegistry = createAccountRegistry({
+  root: appDataDir(),
+  appSettings: () => currentSettings(),
+  saveAppSettings: saveSettings,
+  accountSettings: accountSettingsStore,
+  tokens: accountTokenStore,
+})
+
 /** A valid access token, refreshed when it is about to expire. */
 async function accessToken(): Promise<string> {
-  const tokens = await loadTokens()
+  const id = await currentAccountId()
+  if (!id) throw new Error('the app is not signed in')
+  const tokens = await accountTokenStore.read(id)
   if (!tokens) throw new Error('the app is not signed in')
   if (tokens.expiry_date - Date.now() > 60_000) return tokens.access_token
 
@@ -127,7 +123,7 @@ async function accessToken(): Promise<string> {
     access_token: refreshed.access_token,
     expiry_date: refreshed.expiry_date,
   }
-  await saveTokens(next)
+  await accountTokenStore.write(id, next)
   return next.access_token
 }
 
@@ -140,7 +136,7 @@ const client = createDriveClient(accessToken)
  * during sign-in - so it is shown. The secret is never read back into the
  * interface; the settings only say whether one is stored.
  */
-async function currentSettings(): Promise<Settings> {
+async function currentSettings(): Promise<AppSettings> {
   const settings = await settingsStore.read()
   return {
     ...settings,
@@ -156,11 +152,63 @@ async function currentSettings(): Promise<Settings> {
  * encrypted credential store, and the settings only say whether one is
  * stored.
  */
-async function saveSettings(patch: Partial<Settings>): Promise<Settings> {
+async function saveSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
   const current = await currentSettings()
   const next = { ...current, ...patch }
   await settingsStore.write(next)
   return next
+}
+
+/** The current account's tokens, or null when it is not signed in. */
+async function currentAccountTokens(): Promise<OAuthTokens | null> {
+  const id = await currentAccountId()
+  if (!id) return null
+  return accountTokenStore.read(id)
+}
+
+/** The id of the account the app is showing, or null when there is none. */
+async function currentAccountId(): Promise<string | null> {
+  const app = await currentSettings()
+  return app.currentAccountId
+}
+
+/**
+ * The current account's settings: its mirrors, its schedule, its notice.
+ *
+ * An install with no account has none of them yet, and the defaults say
+ * so: no mirrors, no schedule, nothing to sync.
+ */
+async function currentAccountSettings(): Promise<AccountSettings> {
+  const id = await currentAccountId()
+  if (!id) return defaultAccountSettings()
+  return accountSettingsStore.read(id)
+}
+
+/** Save part of the current account's settings. */
+async function saveAccountSettings(
+  patch: Partial<AccountSettings>,
+): Promise<AccountSettings> {
+  const id = await currentAccountId()
+  if (!id) throw new Error('no account is selected')
+  const current = await accountSettingsStore.read(id)
+  const next = { ...current, ...patch }
+  await accountSettingsStore.write(id, next)
+  return next
+}
+
+/** The current account's manifest store, rooted in the account's folder. */
+async function currentManifestStore() {
+  const id = await currentAccountId()
+  if (!id) throw new Error('no account is selected')
+  return createManifestStore(accountDir(appDataDir(), id))
+}
+
+/** Where copies of the manifest are kept. */
+async function backupPaths(): Promise<string[]> {
+  const app = await currentSettings()
+  const paths = [appBackupDir(appDataDir())]
+  if (app.extraBackupPath) paths.push(app.extraBackupPath)
+  return paths
 }
 
 /* ------------------------------------------------------------------ */
@@ -207,8 +255,18 @@ async function authenticate(): Promise<{ ok: boolean; email?: string }> {
       code,
       redirectUri,
     })
-    await saveTokens(tokens)
-    return { ok: true }
+    // Which account is this? The app cannot file the sign-in until it
+    // knows, so the address is read with a client built over the token
+    // that has just come back.
+    const fresh = createDriveClient(async () => tokens.access_token)
+    const email = await fresh.getAccountEmail()
+    if (!email) {
+      // The app cannot tell which account this is, so it will not guess.
+      throw new Error('the app could not read your Google account address, so it will not sign you in')
+    }
+    const account = await accountRegistry.signIn(email, tokens)
+    await accountRegistry.setCurrent(account.id)
+    return { ok: true, email }
   } catch (err) {
     emit({
       type: 'error',
@@ -316,57 +374,61 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       }
     }
 
-    const settings = await currentSettings()
-    // The store keeps the manifest in the directory that holds it, which
-    // is the one the settings show the user.
-    const store = createManifestStore(appDataDir())
+    // An install that was made before accounts existed is moved into the
+    // account layout first, and it happens before anything reads the
+    // settings: the legacy file and the new one share a path.
+    await migrateToAccounts({
+      root: appDataDir(),
+      writeAppSettings: (settings) => settingsStore.write(settings),
+      unregisterLegacyTask: async () => {
+        await unregisterTask()
+      },
+      log: (message: string) => logger.log({ level: 'info', message }),
+    })
 
-    // The mirrors are configuration, and the configuration lives in the
-    // settings. An app that has synced before already knows them: the
-    // manifest holds the names and the roots, and they are recovered from
-    // it once, so an upgrade does not hand the user four broken mirrors
-    // and a fresh install starts with an empty list.
-    if (settings.mirrors.length === 0) {
-      const manifest = await store.read()
-      const recovered = mirrorConfigsFromManifest(manifest)
-      if (recovered.length > 0) {
-        await settingsStore.patch({ mirrors: recovered })
+    // The mirrors are configuration, and the configuration lives with the
+    // account they belong to. An app that has synced before already knows
+    // them: the manifest holds the names and the roots, and they are
+    // recovered from it once, so an upgrade does not hand the user four
+    // broken mirrors and a fresh install starts with an empty list.
+    const accountSettings = await currentAccountSettings()
+    if (accountSettings.mirrors.length === 0) {
+      const id = await currentAccountId()
+      if (id) {
+        const manifest = await (await currentManifestStore()).read()
+        const recovered = mirrorConfigsFromManifest(manifest)
+        if (recovered.length > 0) {
+          await saveAccountSettings({ mirrors: recovered })
+        }
       }
     }
 
     const runner = createRunner({
-      client,
-      store,
+      // The client and the manifest belong to the account being run.
+      client: async () => client,
+      store: () => currentManifestStore(),
       // The settings are read when a run starts, so a folder the user adds
       // while the app is open is mirrored by the next run.
-      settings: () => currentSettings(),
+      settings: () => currentAccountSettings(),
+      // The app's own settings: the guard threshold, the list of accounts.
+      appSettings: () => currentSettings(),
+      // Where copies of the manifest are kept.
+      backupPaths: () => backupPaths(),
       // The runner writes the settings too, when a run resets the
       // missed-slot clock.
-      saveSettings,
+      saveSettings: saveAccountSettings,
       emit,
       // The lock that stops a scheduled run and this window from writing
       // the manifest at the same time.
       lockPath: join(appDataDir(), 'sync.lock'),
       log: (message: string) => logger.log({ level: 'warn', message }),
       hasCredentials: async () =>
-        Boolean(credentialStore.getClientId()) && (await loadTokens()) !== null,
-      accountEmail: async () => {
-        const tokens = await loadTokens()
-        if (!tokens) return null
-        try {
-          return await client.getAccountEmail()
-        } catch {
-          // The account is unknown rather than wrong. The manifest's
-          // account is only used to catch a switch, and a missing answer
-          // must never look like a different account.
-          return null
-        }
-      },
+        Boolean(credentialStore.getClientId()) && (await currentAccountTokens()) !== null,
     })
 
     const scheduler = createScheduler({
-      settings: () => currentSettings(),
-      saveSettings,
+      settings: () => currentAccountSettings(),
+      saveSettings: saveAccountSettings,
       runSync: () => runner.syncNow(),
       now: () => new Date(),
       registerTask,
@@ -393,6 +455,8 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       runner,
       getSettings: () => currentSettings(),
       saveSettings,
+      getAccountSettings: () => currentAccountSettings(),
+      saveAccountSettings,
       async setCredentials(clientId, clientSecret) {
         try {
           await credentialStore.setCredentials(clientId, clientSecret)
@@ -403,14 +467,18 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       },
       authenticate,
       async signOut() {
-        await rm(tokenFile(), { force: true })
+        // The sign-in goes; the manifest, the mirrors and the schedule
+        // stay, so signing back in restores the account exactly as it was.
+        const id = await currentAccountId()
+        if (id) await accountTokenStore.clear(id)
       },
       async openLogFolder() {
         await shell.openPath(join(appDataDir(), 'logs'))
       },
       async showManifest() {
-        const current = await currentSettings()
-        await shell.openPath(current.manifestPath)
+        const id = await currentAccountId()
+        if (!id) return
+        await shell.openPath(accountManifestPath(appDataDir(), id))
       },
       async appIcon() {
         // The interface shows the icon in the top bar. It is sent as a
@@ -434,16 +502,22 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         return result.filePaths[0] ?? null
       },
       async resetConnection() {
-        // The token, the client id and the secret go. The manifest, the
-        // mirrors, the schedule and the backups stay: they are the user's
-        // work, not the connection's.
-        await rm(tokenFile(), { force: true })
+        // Every sign-in, the client id and the secret go. The manifests,
+        // the mirrors, the schedules and the backups stay: they are the
+        // user's work, not the connection's.
+        const app = await currentSettings()
+        for (const account of app.accounts) {
+          await accountTokenStore.clear(account.id)
+        }
         await credentialStore.clear()
       },
       async startFreshManifest() {
         // The old manifest is kept, so a change of heart costs nothing.
-        const archiveDir = join(appDataDir(), 'manifest-archive')
+        const id = await currentAccountId()
+        if (!id) return
+        const archiveDir = join(accountDir(appDataDir(), id), 'manifest-archive')
         await mkdir(archiveDir, { recursive: true })
+        const store = await currentManifestStore()
         const manifest = await store.read()
         const stamp = new Date().toISOString().replace(/[:.]/g, '-')
         await writeFile(
@@ -469,8 +543,8 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       // The Windows task's launch: one sync, no window, then out. The
       // scheduler records when the run happened, so the next slot is
       // measured from this one.
-      const settings = await currentSettings()
-      if (!settings.schedule.enabled) {
+      const account = await currentAccountSettings()
+      if (!account.schedule.enabled) {
         // The schedule was switched off, or was never turned on. The task
         // has to go, or it will keep firing.
         await unregisterTask()

@@ -1,7 +1,8 @@
 import { isRunMissed, nextFireAt } from '../core/schedule'
 import type { ScheduleShape } from '../core/schedule'
 import type { RunSummary } from './ipc'
-import type { ScheduleConfig, Settings } from './settings'
+import type { ScheduleConfig } from './settings'
+import type { AccountSettings } from './accountSettings'
 
 /**
  * The timer that runs the syncs on their own.
@@ -17,11 +18,11 @@ import type { ScheduleConfig, Settings } from './settings'
 
 /** What the scheduler needs from the outside world. */
 export interface SchedulerDeps {
-  /** The settings as they are now. */
-  settings(): Promise<Settings>
-  /** Save part of the settings. */
-  saveSettings(patch: Partial<Settings>): Promise<Settings>
-  /** Run a sync of every enabled mirror. */
+  /** The account's settings as they are now. */
+  settings(): Promise<AccountSettings>
+  /** Save part of the account's settings. */
+  saveSettings(patch: Partial<AccountSettings>): Promise<AccountSettings>
+  /** Run a sync of every enabled mirror of this account. */
   runSync(): Promise<RunSummary>
   /** The current time. */
   now(): Date

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createScheduler } from '../src/main/scheduler'
-import { defaultSettings } from '../src/main/settings'
+import { defaultAccountSettings } from '../src/main/accountSettings'
 import type { RunSummary } from '../src/main/ipc'
 import type { ScheduleShape } from '../src/core/schedule'
-import type { Settings } from '../src/main/settings'
+import type { AccountSettings } from '../src/main/accountSettings'
 
 /** Everything the scheduler under test needs, and what it did. */
 function harness(
@@ -15,8 +15,8 @@ function harness(
     taskExists?: boolean
   } = {},
 ) {
-  const settings: Settings = {
-    ...defaultSettings(),
+  const settings: AccountSettings = {
+    ...defaultAccountSettings(),
     schedule: {
       enabled: true,
       shape: options.shape ?? { kind: 'daily', at: '02:00' },
@@ -34,8 +34,8 @@ function harness(
   }
 
   const deps = {
-    settings: async (): Promise<Settings> => settings,
-    saveSettings: async (patch: Partial<Settings>): Promise<Settings> => {
+    settings: async (): Promise<AccountSettings> => settings,
+    saveSettings: async (patch: Partial<AccountSettings>): Promise<AccountSettings> => {
       Object.assign(settings, patch)
       return settings
     },

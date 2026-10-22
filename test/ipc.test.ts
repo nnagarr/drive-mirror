@@ -12,7 +12,8 @@ vi.mock('electron', () => ({
 }))
 
 import { registerIpc } from '../src/main/ipc'
-import { defaultSettings } from '../src/main/settings'
+import { defaultAppSettings } from '../src/main/settings'
+import { defaultAccountSettings } from '../src/main/accountSettings'
 import type { IpcDeps } from '../src/main/ipc'
 
 /**
@@ -30,6 +31,8 @@ const PRELOAD_CHANNELS = [
   'drive-mirror:rebase',
   'drive-mirror:get-settings',
   'drive-mirror:save-settings',
+  'drive-mirror:get-account-settings',
+  'drive-mirror:save-account-settings',
   'drive-mirror:set-credentials',
   'drive-mirror:authenticate',
   'drive-mirror:sign-out',
@@ -79,8 +82,10 @@ function stubDeps(): IpcDeps {
       pruneRemovedMirrors: async () => 0,
       downloadRestored: async () => ({ ok: true, path: 'a.txt' }),
     },
-    getSettings: async () => defaultSettings(),
-    saveSettings: async () => defaultSettings(),
+    getSettings: async () => defaultAppSettings(),
+    saveSettings: async () => defaultAppSettings(),
+    getAccountSettings: async () => defaultAccountSettings(),
+    saveAccountSettings: async () => defaultAccountSettings(),
     setCredentials: async () => ({ ok: true }),
     authenticate: async () => ({ ok: true }),
     signOut: async () => undefined,

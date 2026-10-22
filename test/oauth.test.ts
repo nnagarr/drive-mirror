@@ -182,9 +182,9 @@ describe('the settings store', () => {
     expect(settings.guardThreshold).toBe(5)
     expect(settings.clientId).toBe('')
     expect(settings.clientSecretSet).toBe(false)
-    expect(settings.backupPaths.length).toBeGreaterThan(0)
-    expect(settings.backupPaths.every((path) => typeof path === 'string')).toBe(true)
-    expect(settings.manifestPath).toContain('manifest.json')
+    expect(settings.accounts).toEqual([])
+    expect(settings.currentAccountId).toBeNull()
+    expect(settings.extraBackupPath).toBeNull()
   })
 
   it('writes and reads back the settings', async () => {

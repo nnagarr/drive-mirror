@@ -10,16 +10,19 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppEvent, AppState, RunSummary } from '../main/ipc'
-import type { Settings } from '../main/settings'
-import type { ScheduleConfig } from '../main/settings'
+import type { AppSettings, ScheduleConfig } from '../main/settings'
+import type { AccountSettings } from '../main/accountSettings'
 
 export interface DriveMirrorApi {
   getState(): Promise<AppState>
   syncNow(mirrorName?: string): Promise<RunSummary>
   overrideGuard(mirrorName: string): Promise<RunSummary>
   rebase(mirrorName: string): Promise<void>
-  getSettings(): Promise<Settings>
-  saveSettings(patch: Partial<Settings>): Promise<Settings>
+  getSettings(): Promise<AppSettings>
+  saveSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+  /** The current account's settings: its mirrors, its schedule, its notice. */
+  getAccountSettings(): Promise<AccountSettings>
+  saveAccountSettings(patch: Partial<AccountSettings>): Promise<AccountSettings>
   setCredentials(clientId: string, clientSecret: string): Promise<{ ok: boolean }>
   authenticate(): Promise<{ ok: boolean; email?: string }>
   signOut(): Promise<void>
@@ -66,8 +69,11 @@ const api: DriveMirrorApi = {
     ipcRenderer.invoke('drive-mirror:override-guard', mirrorName),
   rebase: (mirrorName: string) => ipcRenderer.invoke('drive-mirror:rebase', mirrorName),
   getSettings: () => ipcRenderer.invoke('drive-mirror:get-settings'),
-  saveSettings: (patch: Partial<Settings>) =>
+  saveSettings: (patch: Partial<AppSettings>) =>
     ipcRenderer.invoke('drive-mirror:save-settings', patch),
+  getAccountSettings: () => ipcRenderer.invoke('drive-mirror:get-account-settings'),
+  saveAccountSettings: (patch: Partial<AccountSettings>) =>
+    ipcRenderer.invoke('drive-mirror:save-account-settings', patch),
   setCredentials: (clientId: string, clientSecret: string) =>
     ipcRenderer.invoke('drive-mirror:set-credentials', clientId, clientSecret),
   authenticate: () => ipcRenderer.invoke('drive-mirror:authenticate'),

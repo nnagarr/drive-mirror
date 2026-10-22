@@ -1,4 +1,4 @@
-﻿/**
+/**
  * The sync runner.
  *
  * This is the part that ties everything together for one mirror: it scans
@@ -58,7 +58,9 @@ import type { ManifestStore } from '../core/manifest'
 import type { MirrorConfig } from '../core/mirrorConfig'
 import type { DriveClient } from '../drive/client'
 import { appDataDir } from './settings'
-import type { Settings } from './settings'
+import type { AppSettings } from './settings'
+import type { AccountSettings } from './accountSettings'
+import { backupDirFor } from './accountPaths'
 import type { AppEvent, AppState, MirrorCard, RunSummary } from './ipc'
 
 /** The id of the user's Drive root folder. */
@@ -72,16 +74,30 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
 
 /** What the runner needs from the outside world. */
 export interface RunnerDeps {
-  client: DriveClient
-  store: ManifestStore
+  /** The Drive client of the account being run. */
+  client: () => Promise<DriveClient>
+  /** The manifest store of the account being run. */
+  store: () => Promise<ManifestStore>
   /**
-   * The settings as they are now.
+   * The account's settings as they are now.
    *
    * A getter, not a value: the user can add a folder, pause a mirror or
    * change a destination while the app is running, and the next run must
    * see it without a restart.
    */
-  settings: () => Promise<Settings>
+  settings: () => Promise<AccountSettings>
+  /**
+   * The app's own settings as they are now.
+   *
+   * The guard threshold, the list of accounts and the extra backup
+   * location belong to the machine, not to a Google account.
+   */
+  appSettings: () => Promise<AppSettings>
+  /**
+   * Where copies of the manifest are kept: the app's own folder, and any
+   * extra place the user named.
+   */
+  backupPaths: () => Promise<string[]>
   emit: (event: AppEvent) => void
   /**
    * Where the lock file lives.
@@ -92,10 +108,8 @@ export interface RunnerDeps {
   lockPath?: string
   /** Whether the app holds usable credentials. */
   hasCredentials?: () => boolean | Promise<boolean>
-  /** The signed-in account, when it is known. */
-  accountEmail?: () => string | null | Promise<string | null>
-  /** Save part of the settings. */
-  saveSettings?: (patch: Partial<Settings>) => Promise<Settings>
+  /** Save part of the account's settings. */
+  saveSettings?: (patch: Partial<AccountSettings>) => Promise<AccountSettings>
   /**
    * Where a message about the run that is not an error goes.
    *
@@ -203,7 +217,7 @@ export function createRunner(deps: RunnerDeps): Runner {
 
   async function refreshAuth(): Promise<void> {
     auth.signedIn = deps.hasCredentials ? Boolean(await deps.hasCredentials()) : false
-    auth.email = (await deps.accountEmail?.()) ?? null
+    auth.email = currentAccountEmail(await deps.appSettings())
   }
 
   /**
@@ -213,7 +227,7 @@ export function createRunner(deps: RunnerDeps): Runner {
    * cards are only what the last run learned about them. A mirror the user
    * added a moment ago therefore has a card at once.
    */
-  function buildState(settings: Settings, manifest: Manifest): AppState {
+  function buildState(settings: AccountSettings, manifest: Manifest): AppState {
     return {
       mirrors: configuredMirrors(settings).map((config) => {
         const mirrorCard = card(config.name)
@@ -255,7 +269,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       try {
         await refreshAuth()
         const settings = await deps.settings()
-        const manifest = await deps.store.read()
+        const store = await deps.store()
+        const manifest = await store.read()
         deps.emit({ type: 'state', state: buildState(settings, manifest) })
       } catch {
         // The state event is a picture of the app for the interface. A
@@ -271,7 +286,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     config: MirrorConfig,
     manifest: Manifest,
     overrideGuard: boolean,
-    settings: Settings,
+    guardThreshold: number,
   ): Promise<{ counts: Counts; changed: Array<{ mirror: string; relPath: string; action: string }>; reports: Report[]; skipped: boolean }> {
     const changed: Array<{ mirror: string; relPath: string; action: string }> = []
     const reports: Report[] = []
@@ -351,7 +366,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       const hits = checkCountDrop(
         mirrorManifest.lastCounts,
         local.recursiveCounts,
-        settings.guardThreshold,
+        guardThreshold,
       )
       if (hits.length > 0) {
         const where = hits.map((hit) => hit.dir || 'the root').join(', ')
@@ -372,7 +387,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     // folder the user renamed in the Drive browser is honoured rather
     // than duplicated.
     const resolved = await resolveMirrorPath(
-      deps.client,
+      await deps.client(),
       config.drivePath,
       MY_DRIVE_ID,
       mirrorManifest.driveFolderId,
@@ -390,7 +405,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     const folderId = resolved.id
 
     // --- The Drive tree ----------------------------------------------
-    const nodes = await listTree(deps.client, folderId)
+    const nodes = await listTree(await deps.client(), folderId)
     const drive: DriveTree = buildDriveTree(nodes)
 
     // The only ids this run may write under are the ones inside the
@@ -406,10 +421,10 @@ export function createRunner(deps: RunnerDeps): Runner {
 
     // A folder that exists on disk but not on Drive is created, parents
     // first, so an empty folder is mirrored as an empty folder.
-    await createMissingFolders(deps.client, config.root, local, mirrorManifest, folderId)
+    await createMissingFolders(await deps.client(), config.root, local, mirrorManifest, folderId)
 
     // --- The plan ----------------------------------------------------
-    const io = buildIo(deps.client, config.root, drive)
+    const io = buildIo(await deps.client(), config.root, drive)
     const exportPlan = planExportPaths(drive, mirrorManifest, local)
     buildClaimIndex(mirrorManifest, exportPlan, drive)
 
@@ -425,8 +440,8 @@ export function createRunner(deps: RunnerDeps): Runner {
     // --- Run it ------------------------------------------------------
     phase.value = 'uploads'
     const result = await executePlan(plan, {
-      client: deps.client,
-      store: deps.store,
+      client: await deps.client(),
+      store: await deps.store(),
       manifest: mirrorManifest,
       root: config.root,
       onProgress: (event) => {
@@ -542,7 +557,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       // The settings are read now, not when the app started: a folder the
       // user added a moment ago is mirrored by this run.
       const settings = await deps.settings()
-      const manifest = await deps.store.read()
+      const store = await deps.store()
+      const manifest = await store.read()
       const selected = mirrorName
         ? mirrorsToSync(settings).filter((config) => config.name === mirrorName)
         : mirrorsToSync(settings)
@@ -564,7 +580,11 @@ export function createRunner(deps: RunnerDeps): Runner {
       // points at a file that account can see, so a different account
       // cannot use it at all. The run is blocked rather than quietly
       // producing a broken mirror.
-      const signedIn = await deps.accountEmail?.()
+      //
+      // The address is the one the app already knows - the account the
+      // manifest is filed under - so the check needs no call to Drive and
+      // no network failure can turn it off.
+      const signedIn = currentAccountEmail(await deps.appSettings())
       const owner =
         typeof manifest.accountEmail === 'string' ? manifest.accountEmail : null
       if (signedIn && owner && owner !== signedIn) {
@@ -583,7 +603,12 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
 
       for (const config of selected) {
-        const outcome = await runMirror(config, manifest, options?.overrideGuard ?? false, settings)
+        const outcome = await runMirror(
+          config,
+          manifest,
+          options?.overrideGuard ?? false,
+          (await deps.appSettings()).guardThreshold,
+        )
         summary.uploaded += outcome.counts.uploaded
         summary.updated += outcome.counts.updated
         summary.downloaded += outcome.counts.downloaded
@@ -595,8 +620,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
 
       summary.finishedAt = new Date().toISOString()
-      await deps.store.checkpoint(manifest)
-      const backups = await writeBackups(settings.backupPaths, manifest, deps.log)
+      await store.checkpoint(manifest)
+      const backups = await writeBackups(await deps.backupPaths(), manifest, currentAccountEmail(await deps.appSettings()) ?? '', deps.log)
       for (const path of backups.failed) {
         // The sync itself is fine, but the safety net is not being
         // refreshed, and the user has to know that.
@@ -641,7 +666,8 @@ export function createRunner(deps: RunnerDeps): Runner {
   const runner: Runner = {
     async prime(): Promise<void> {
       const settings = await deps.settings()
-      const manifest = await deps.store.read()
+      const store = await deps.store()
+      const manifest = await store.read()
       for (const config of configuredMirrors(settings)) {
         const mirrorCard = card(config.name)
         mirrorCard.localRoot = config.root
@@ -675,7 +701,8 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       try {
         const settings = await deps.settings()
-        const manifest = await deps.store.read()
+        const store = await deps.store()
+        const manifest = await store.read()
         const config = settings.mirrors.find((m) => m.name === mirrorName)
         if (!config) return
 
@@ -701,8 +728,8 @@ export function createRunner(deps: RunnerDeps): Runner {
           }
         }
 
-        await deps.store.checkpoint(manifest)
-        await writeBackups(settings.backupPaths, manifest, deps.log)
+        await store.checkpoint(manifest)
+        await writeBackups(await deps.backupPaths(), manifest, currentAccountEmail(await deps.appSettings()) ?? '', deps.log)
       } finally {
         try {
           await releaseSyncLock(lockPath)
@@ -730,7 +757,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
       if (config.drivePath === drivePath) return { ok: true }
 
-      const manifest = await deps.store.read()
+      const store = await deps.store()
+      const manifest = await store.read()
       const mirrorManifest = manifest.mirrors[mirrorName]
       const folderId = mirrorManifest?.driveFolderId
       if (!folderId) {
@@ -745,7 +773,7 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       let parentId = MY_DRIVE_ID
       if (parentPath) {
-        const resolved = await resolveMirrorPath(deps.client, parentPath, MY_DRIVE_ID)
+        const resolved = await resolveMirrorPath(await deps.client(), parentPath, MY_DRIVE_ID)
         if ('ambiguous' in resolved) {
           return {
             ok: false,
@@ -758,7 +786,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
 
       try {
-        await deps.client.moveFolder(folderId, parentId, newName)
+        await (await deps.client()).moveFolder(folderId, parentId, newName)
       } catch (err) {
         return {
           ok: false,
@@ -774,13 +802,14 @@ export function createRunner(deps: RunnerDeps): Runner {
         mirrorManifest.driveFolderName = newName
         mirrorManifest.drivePath = drivePath
       }
-      await deps.store.checkpoint(manifest)
+      await store.checkpoint(manifest)
       return { ok: true }
     },
 
     async pruneRemovedMirrors(): Promise<number> {
       const settings = await deps.settings()
-      const manifest = await deps.store.read()
+      const store = await deps.store()
+      const manifest = await store.read()
       const cutoff = Date.now() - THIRTY_DAYS_MS
       const forgotten: string[] = []
       for (const config of settings.mirrors) {
@@ -791,7 +820,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         forgotten.push(config.name)
       }
       if (forgotten.length === 0) return 0
-      await deps.store.checkpoint(manifest)
+      await store.checkpoint(manifest)
       // The configuration goes too, so the mirror is forgotten entirely.
       if (deps.saveSettings) {
         const current = await deps.settings()
@@ -812,7 +841,8 @@ export function createRunner(deps: RunnerDeps): Runner {
         return { ok: false, message: `There is no mirror called ${mirrorName}.` }
       }
 
-      const manifest = await deps.store.read()
+      const store = await deps.store()
+      const manifest = await store.read()
       const mirrorManifest = manifest.mirrors[mirrorName]
       const record = Object.values(mirrorManifest?.retired ?? {}).find(
         (r) => r.id === driveFileId,
@@ -832,7 +862,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       const relPath = record.localPath ?? record.path
       const dest = join(config.root, ...relPath.split('/'))
 
-      const node = await deps.client.getFile(driveFileId)
+      const node = await (await deps.client()).getFile(driveFileId)
       if (!node) {
         return { ok: false, message: 'That file is not on Drive any more.' }
       }
@@ -845,9 +875,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       try {
         const native = exportInfoFor(record.driveMimeType)
         if (native) {
-          await deps.client.exportTo(driveFileId, tempPath, native.exportMime)
+          await (await deps.client()).exportTo(driveFileId, tempPath, native.exportMime)
         } else {
-          await deps.client.downloadTo(driveFileId, tempPath)
+          await (await deps.client()).downloadTo(driveFileId, tempPath)
         }
       } catch (err) {
         await rm(tempPath, { force: true })
@@ -906,7 +936,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           localMtimeMs: info?.mtimeMs ?? 0,
         }
       }
-      await deps.store.checkpoint(manifest)
+      await store.checkpoint(manifest)
       return { ok: true, path: relPath }
     },
 
@@ -923,7 +953,8 @@ export function createRunner(deps: RunnerDeps): Runner {
 
     async state(): Promise<AppState> {
       const settings = await deps.settings()
-      const manifest = await deps.store.read()
+      const store = await deps.store()
+      const manifest = await store.read()
       return buildState(settings, manifest)
     },
   }
@@ -932,12 +963,25 @@ export function createRunner(deps: RunnerDeps): Runner {
 }
 
 /**
+ * The address of the account the app is showing.
+ *
+ * The app already knows it - it is the account the manifest is filed under
+ * - so the guard and the backup folders need no call to Drive, and no
+ * network failure can turn the guard off.
+ */
+function currentAccountEmail(app: AppSettings): string | null {
+  if (!app.currentAccountId) return null
+  const found = app.accounts.find((account) => account.id === app.currentAccountId)
+  return found ? found.email : null
+}
+
+/**
  * The mirrors the app is configured with.
  *
  * A mirror the user removed is not one of them: it keeps its name and its
  * folder until it is forgotten, but it is not mirrored any more.
  */
-function configuredMirrors(settings: Settings): MirrorConfig[] {
+function configuredMirrors(settings: AccountSettings): MirrorConfig[] {
   return settings.mirrors.filter((config) => !config.removedAt)
 }
 
@@ -945,7 +989,7 @@ function configuredMirrors(settings: Settings): MirrorConfig[] {
  * The mirrors a run should sync: the ones that are enabled and have not
  * been removed.
  */
-function mirrorsToSync(settings: Settings): MirrorConfig[] {
+function mirrorsToSync(settings: AccountSettings): MirrorConfig[] {
   return settings.mirrors.filter((config) => config.enabled && !config.removedAt)
 }
 
@@ -1050,6 +1094,7 @@ async function createLockFile(lockPath: string): Promise<boolean> {
 export async function writeBackups(
   paths: string[],
   manifest: Manifest,
+  email: string,
   log?: (message: string) => void,
 ): Promise<{ written: string[]; failed: string[] }> {
   const written: string[] = []
@@ -1058,15 +1103,19 @@ export async function writeBackups(
     note(log, 'no backup copy is configured, so the manifest has no safety net')
   }
   for (const path of paths) {
+    // Each account's manifest has a folder of its own inside the backup
+    // root, named after the account, so two accounts never write over one
+    // another.
+    const folder = backupDirFor(path, email)
     try {
-      await mkdir(path, { recursive: true })
-      await writeAtomic(join(path, 'manifest.json'), serialiseManifest(manifest))
-      written.push(path)
+      await mkdir(folder, { recursive: true })
+      await writeAtomic(join(folder, 'manifest.json'), serialiseManifest(manifest))
+      written.push(folder)
     } catch (err) {
-      failed.push(path)
+      failed.push(folder)
       note(
         log,
-        `the backup copy at ${path} could not be written: ${
+        `the backup copy at ${folder} could not be written: ${
           err instanceof Error ? err.message : String(err)
         }`,
       )
