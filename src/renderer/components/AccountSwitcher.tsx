@@ -11,8 +11,10 @@ export interface AccountSwitcherProps {
   onSwitch: (id: string) => void
   /** Sign in, and make a new account if the address is new. */
   onConnect: () => void
-  /** Forget an account: its folder, its task, and its place on the list. */
-  onForget: (id: string) => void
+  /** Remove an account: its files, its copies and its place on the list. */
+  onRemove: (id: string) => void
+  /** The account being removed, while it is being removed. */
+  removingId: string | null
 }
 
 /**
@@ -27,7 +29,8 @@ export function AccountSwitcher({
   currentAccountId,
   onSwitch,
   onConnect,
-  onForget,
+  onRemove,
+  removingId,
 }: AccountSwitcherProps): JSX.Element {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement | null>(null)
@@ -113,12 +116,13 @@ export function AccountSwitcher({
               type="button"
               role="menuitem"
               className="switcher__item switcher__item--danger"
+              disabled={removingId === current.id}
               onClick={() => {
-                onForget(current.id)
+                onRemove(current.id)
                 setOpen(false)
               }}
             >
-              Forget this account
+              {removingId === current.id ? 'Removing this account…' : 'Remove this account'}
             </button>
           )}
         </div>

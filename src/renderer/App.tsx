@@ -53,6 +53,10 @@ export function App(): JSX.Element {
     null,
   )
   const [wizardOpen, setWizardOpen] = useState(false)
+  /** The account being removed, and whether a run is holding it up. */
+  const [removing, setRemoving] = useState<{ id: string; email: string; waiting: boolean } | null>(
+    null,
+  )
   /** The app's icon, shown next to the title. */
   const [icon, setIcon] = useState('')
   /**
@@ -67,7 +71,7 @@ export function App(): JSX.Element {
   /**
    * Re-read everything the screen shows.
    *
-   * Switching, connecting or forgetting an account changes the app's
+   * Switching, connecting or removing an account changes the app's
    * settings, the account's settings and the state, so all three are read
    * again. Reading only the state would leave the switcher showing the
    * old account.
@@ -281,23 +285,41 @@ export function App(): JSX.Element {
   }, [refresh])
 
   /**
-   * Forget an account.
+   * Remove an account.
    *
-   * The account's folder goes, and so does its scheduled task. The copies
-   * of its manifest in the backup folders stay, so the file list can be
-   * recovered by hand.
+   * Its folder, its schedule, its file history, the copies of its manifest
+   * in every backup folder, its log lines and its Windows task all go.
+   * The files on this computer and in Drive are left exactly as they are.
+   *
+   * A run that is still going holds the removal up: the main process waits
+   * for it to finish, so the run cannot write the manifest back after the
+   * folder was deleted.
    */
-  const forgetAccount = useCallback(
+  const removeAccount = useCallback(
     async (id: string) => {
       const account = settings?.accounts.find((a) => a.id === id)
       const what = account ? `the account ${account.email}` : 'this account'
-      if (!window.confirm(`Forget ${what}? Its folders and its history are deleted. The copies of its manifest in the backup folders are kept.`)) {
-        return
+      const agreed = window.confirm(
+        `Remove ${what}?\n\n` +
+          'This deletes its folder, its schedule, its file history, the copies ' +
+          'of its manifest in every backup folder, its lines in the log and its ' +
+          'Windows task.\n\n' +
+          'Your files stay on this computer and in Google Drive. Nothing on ' +
+          'Drive is deleted.\n\n' +
+          'This cannot be undone.',
+      )
+      if (!agreed) return
+      setRemoving({ id, email: account?.email ?? '', waiting: state?.running ?? false })
+      try {
+        await window.driveMirror.removeAccount(id)
+        await refresh()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'The account could not be removed.')
+      } finally {
+        setRemoving(null)
       }
-      await window.driveMirror.forgetAccount(id)
-      await refresh()
     },
-    [refresh, settings],
+    [refresh, settings, state?.running],
   )
 
   return (
@@ -311,7 +333,8 @@ export function App(): JSX.Element {
             currentAccountId={settings?.currentAccountId ?? null}
             onSwitch={(id) => void switchAccount(id)}
             onConnect={() => void connectAccount()}
-            onForget={(id) => void forgetAccount(id)}
+            onRemove={(id) => void removeAccount(id)}
+            removingId={removing?.id ?? null}
           />
         </div>
         <div className="topbar__actions">
@@ -333,7 +356,7 @@ export function App(): JSX.Element {
           <button
             type="button"
             className="button button--primary"
-            disabled={running}
+            disabled={running || removing !== null}
             onClick={() => void sync()}
           >
             {state?.phase === 'waiting'
@@ -360,6 +383,16 @@ export function App(): JSX.Element {
           <button type="button" className="button button--quiet" onClick={() => setNotice(null)}>
             Dismiss
           </button>
+        </div>
+      )}
+
+      {removing && (
+        <div className="notice" role="status">
+          <span>
+            {removing.waiting
+              ? `Waiting for the sync to finish, then removing ${removing.email}…`
+              : `Removing ${removing.email}…`}
+          </span>
         </div>
       )}
 

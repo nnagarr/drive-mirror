@@ -3,8 +3,8 @@
  *
  * Every account is a separate world: its own mirrors, its own schedule, its
  * own notice. Those three things live in the account's folder, so the
- * folder can be handed over, copied or deleted on its own, and so
- * forgetting an account is one delete of one folder.
+ * folder can be handed over, copied or deleted on its own, and so an
+ * account's own state can be removed as one folder.
  *
  * The app's own settings — the list of accounts, the shared client id, the
  * guard threshold — live in the app-wide settings file instead. The line

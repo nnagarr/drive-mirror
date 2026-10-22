@@ -326,6 +326,18 @@ describe('the sync runner', () => {
     expect(box.client.calls.some((c) => c.op === 'createFile')).toBe(false)
   })
 
+  it('waits for the run in flight before it says the account is idle', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    const r = runner(box)
+
+    const run = r.syncNow(ACC)
+    await r.whenIdle(ACC)
+
+    expect((await r.state(ACC)).running).toBe(false)
+    await run
+  })
+
   it('emits a finished event with the five counts', async () => {
     const box = await harness()
     await writeFile(join(box.root, 'a.psd'), 'local bytes')

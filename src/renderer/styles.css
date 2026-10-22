@@ -173,6 +173,15 @@ body {
   background: var(--surface-2);
 }
 
+.switcher__item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.switcher__item:disabled:hover {
+  background: transparent;
+}
+
 .switcher__item--current {
   background: var(--surface-2);
   font-weight: 600;

@@ -20,8 +20,11 @@
  *   <root>\backups\<email>\manifest.json  a copy of an account's manifest
  *   <root>\legacy\                  the layout before accounts existed
  *
- * The account folder is the unit of storage. Forgetting an account is one
- * delete of one folder, and everything that account knew goes with it.
+ * The account folder is the unit of storage: everything that account knew
+ * lives inside it. Removing the account also takes the copies of its
+ * manifest from the backup folders and its lines from the shared log. The
+ * folder itself is deleted last, so a failure outside it leaves a complete
+ * account behind.
  */
 
 import { randomBytes } from 'node:crypto'

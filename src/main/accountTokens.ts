@@ -4,7 +4,7 @@
  * The tokens for one Google account live in that account's own folder, and
  * nowhere else. That is what makes the account folder the unit of storage:
  * an account's sign-in cannot be read by another account's run, and
- * forgetting an account takes its sign-in with it.
+ * removing an account takes its sign-in with it.
  *
  * The file keeps the shape it has always had — a single base64 payload,
  * encrypted with the operating system's own key — so an account's sign-in
@@ -22,7 +22,7 @@ export interface AccountTokenStore {
   read(id: string): Promise<OAuthTokens | null>
   /** Store an account's tokens, encrypted. */
   write(id: string, tokens: OAuthTokens): Promise<void>
-  /** Forget an account's sign-in, keeping everything else. */
+  /** Drop an account's sign-in, keeping everything else. */
   clear(id: string): Promise<void>
   /** Whether the account is signed in. */
   has(id: string): Promise<boolean>

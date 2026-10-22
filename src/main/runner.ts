@@ -148,6 +148,13 @@ export interface Runner {
     mirrorName?: string,
     options?: { overrideGuard?: boolean },
   ): Promise<RunSummary>
+  /**
+   * Resolve when this account has no run in flight.
+   *
+   * A run that fails still counts as finished: the caller is waiting for
+   * the files to be quiet, not for the run to have succeeded.
+   */
+  whenIdle(accountId: string): Promise<void>
   state(accountId: string): Promise<AppState>
   /** Fill in the file counts without syncing anything. */
   prime(accountId: string): Promise<void>
@@ -1083,6 +1090,11 @@ export function createRunner(deps: RunnerDeps): Runner {
         state.inFlight = null
       })
       return state.inFlight
+    },
+
+    async whenIdle(accountId: string): Promise<void> {
+      const running = stateFor(accountId).inFlight
+      if (running) await running.catch(() => undefined)
     },
 
     async state(accountId: string): Promise<AppState> {

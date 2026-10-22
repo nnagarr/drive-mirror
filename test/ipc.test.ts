@@ -33,7 +33,7 @@ const PRELOAD_CHANNELS = [
   'drive-mirror:get-app-settings',
   'drive-mirror:save-app-settings',
   'drive-mirror:switch-account',
-  'drive-mirror:forget-account',
+  'drive-mirror:remove-account',
   'drive-mirror:get-account-settings',
   'drive-mirror:save-account-settings',
   'drive-mirror:set-credentials',
@@ -80,6 +80,7 @@ function stubDeps(): IpcDeps {
         accountEmail: null,
         needsAuth: false,
       }),
+      whenIdle: async (_accountId: string) => undefined,
       prime: async (_accountId: string) => undefined,
       rebase: async (_accountId: string, _mirrorName: string) => undefined,
       moveMirrorDestination: async (
@@ -113,7 +114,7 @@ function stubDeps(): IpcDeps {
     saveAccountSettings: async (_accountId: string, _patch: unknown) => defaultAccountSettings(),
     currentAccountId: async () => 'acc_test',
     switchAccount: async (_accountId: string) => undefined,
-    forgetAccount: async (_accountId: string) => undefined,
+    removeAccount: async (_accountId: string) => undefined,
     setCredentials: async () => ({ ok: true }),
     authenticate: async () => ({ ok: true }),
     signOut: async () => undefined,
@@ -167,7 +168,7 @@ describe('the IPC surface', () => {
 
   it('refuses an account-scoped call that names an account it does not know', async () => {
     registerIpc(stubDeps())
-    const forgotten = await handlers.get('drive-mirror:forget-account')!(null, 'acc_missing')
+    const forgotten = await handlers.get('drive-mirror:remove-account')!(null, 'acc_missing')
     expect(forgotten).toEqual({ ok: false, message: 'no account is selected' })
   })
 

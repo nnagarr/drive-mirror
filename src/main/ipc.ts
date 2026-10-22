@@ -101,8 +101,8 @@ export interface IpcDeps {
   currentAccountId(): Promise<string | null>
   /** Show a different account. */
   switchAccount(accountId: string): Promise<void>
-  /** Forget an account: its folder, its task, and its place on the list. */
-  forgetAccount(accountId: string): Promise<void>
+  /** Remove an account: its files, its copies and its place on the list. */
+  removeAccount(accountId: string): Promise<void>
   saveSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   setCredentials(clientId: string, clientSecret: string): Promise<{ ok: boolean }>
   authenticate(): Promise<{ ok: boolean; email?: string; accountId?: string; message?: string }>
@@ -271,10 +271,10 @@ export function registerIpc(deps: IpcDeps): void {
     await deps.switchAccount(id)
   })
 
-  ipcMain.handle('drive-mirror:forget-account', async (_event, accountId: string | undefined) => {
+  ipcMain.handle('drive-mirror:remove-account', async (_event, accountId: string | undefined) => {
     const id = await accountOf(accountId)
     if (!id) return NO_ACCOUNT
-    await deps.forgetAccount(id)
+    await deps.removeAccount(id)
     return { ok: true }
   })
 

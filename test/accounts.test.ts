@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +13,7 @@ import {
 } from '../src/main/accountSettings'
 import { createAccountTokenStore } from '../src/main/accountTokens'
 import { createAccountRegistry, findAccountByEmail } from '../src/main/accounts'
+import { stripAccountFromLog } from '../src/main/logFile'
 import { createSettingsStore } from '../src/main/settings'
 import type { SafeStorageLike } from '../src/main/settings'
 
@@ -47,9 +48,19 @@ async function tempRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'dm-accounts-'))
 }
 
+/** A copy of an account's manifest in a backup root. */
+async function backupIn(root: string, email: string): Promise<void> {
+  const dir = backupDirFor(root, email)
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'manifest.json'), '{}', 'utf8')
+}
+
 /** The registry over a temporary app data directory. */
-async function registryBox() {
+async function registryBox(
+  removeDir?: (path: string) => Promise<void>,
+) {
   const root = await tempRoot()
+  const extraBackup = join(root, 'extra-backup')
   const appSettings = createSettingsStore(join(root, 'settings.json'))
   const accountSettings = createAccountSettingsStore(root)
   const tokens = createAccountTokenStore(root, fakeSafeStorage())
@@ -64,8 +75,11 @@ async function registryBox() {
     },
     accountSettings,
     tokens,
+    backupPaths: async () => [appBackupDir(root), extraBackup],
+    stripLog: (account) => stripAccountFromLog(join(root, 'logs'), account),
+    removeDir,
   })
-  return { root, appSettings, accountSettings, tokens, registry }
+  return { root, extraBackup, appSettings, accountSettings, tokens, registry }
 }
 
 describe('the account layout', () => {
@@ -219,16 +233,119 @@ describe('the account registry', () => {
     expect(existsSync(accountDir(box.root, made.id))).toBe(true)
   })
 
-  it('forgets an account and leaves the others alone', async () => {
+  it('removes an account and leaves the others alone', async () => {
     const box = await registryBox()
     const a = await box.registry.create('a@example.com')
     const b = await box.registry.create('b@example.com')
     await box.tokens.write(b.id, TOKENS)
-    await box.registry.forget(a.id)
+    await box.registry.remove(a.id)
     expect(existsSync(accountDir(box.root, a.id))).toBe(false)
     expect(existsSync(accountDir(box.root, b.id))).toBe(true)
     expect(await box.tokens.has(b.id)).toBe(true)
     expect((await box.registry.list()).map((x) => x.email)).toEqual(['b@example.com'])
+  })
+
+  it('removes the manifest copies from every backup folder it wrote to', async () => {
+    const box = await registryBox()
+    const a = await box.registry.create('a@example.com')
+    const b = await box.registry.create('b@example.com')
+    await backupIn(appBackupDir(box.root), a.email)
+    await backupIn(box.extraBackup, a.email)
+    await backupIn(appBackupDir(box.root), b.email)
+
+    await box.registry.remove(a.id)
+
+    expect(existsSync(backupDirFor(appBackupDir(box.root), a.email))).toBe(false)
+    expect(existsSync(backupDirFor(box.extraBackup, a.email))).toBe(false)
+    expect(existsSync(backupDirFor(appBackupDir(box.root), b.email))).toBe(true)
+  })
+
+  it("removes the legacy copy when it is the account's own", async () => {
+    const box = await registryBox()
+    const a = await box.registry.create('a@example.com')
+    await mkdir(legacyDir(box.root), { recursive: true })
+    await writeFile(
+      join(legacyDir(box.root), 'manifest.json'),
+      JSON.stringify({ accountEmail: 'A@Example.com' }),
+      'utf8',
+    )
+
+    await box.registry.remove(a.id)
+
+    expect(existsSync(legacyDir(box.root))).toBe(false)
+  })
+
+  it('keeps the legacy copy when it belongs to another account', async () => {
+    const box = await registryBox()
+    const a = await box.registry.create('a@example.com')
+    await box.registry.create('b@example.com')
+    await mkdir(legacyDir(box.root), { recursive: true })
+    const manifest = JSON.stringify({ accountEmail: 'b@example.com' })
+    await writeFile(join(legacyDir(box.root), 'manifest.json'), manifest, 'utf8')
+
+    await box.registry.remove(a.id)
+
+    expect(existsSync(join(legacyDir(box.root), 'manifest.json'))).toBe(true)
+  })
+
+  it('removes every backup root that is left empty', async () => {
+    const box = await registryBox()
+    const a = await box.registry.create('a@example.com')
+    await backupIn(appBackupDir(box.root), a.email)
+    await backupIn(box.extraBackup, a.email)
+
+    await box.registry.remove(a.id)
+
+    expect(existsSync(appBackupDir(box.root))).toBe(false)
+    expect(existsSync(box.extraBackup)).toBe(false)
+  })
+
+  it("keeps the app's backup folder while another account still has a copy", async () => {
+    const box = await registryBox()
+    const a = await box.registry.create('a@example.com')
+    const b = await box.registry.create('b@example.com')
+    await backupIn(appBackupDir(box.root), a.email)
+    await backupIn(appBackupDir(box.root), b.email)
+
+    await box.registry.remove(a.id)
+
+    expect(existsSync(appBackupDir(box.root))).toBe(true)
+  })
+
+  it('leaves the account whole when a backup copy cannot be deleted', async () => {
+    const box = await registryBox(async (path) => {
+      if (path.includes('extra-backup')) throw new Error('the drive is not connected')
+      await rm(path, { recursive: true, force: true })
+    })
+    const a = await box.registry.create('a@example.com')
+    await backupIn(box.extraBackup, a.email)
+
+    await expect(box.registry.remove(a.id)).rejects.toThrow('the drive is not connected')
+
+    expect(existsSync(accountDir(box.root, a.id))).toBe(true)
+    expect((await box.registry.list()).map((x) => x.email)).toEqual(['a@example.com'])
+  })
+
+  it("removes the account's lines from the shared log", async () => {
+    const box = await registryBox()
+    const a = await box.registry.create('a@example.com')
+    const b = await box.registry.create('b@example.com')
+    await mkdir(join(box.root, 'logs'), { recursive: true })
+    await writeFile(
+      join(box.root, 'logs', 'app.log'),
+      [
+        JSON.stringify({ at: '2026-10-22T00:00:00.000Z', level: 'info', message: 'state', account: a.email }),
+        JSON.stringify({ at: '2026-10-22T00:00:00.000Z', level: 'info', message: 'state', account: b.email }),
+        JSON.stringify({ at: '2026-10-22T00:00:00.000Z', level: 'info', message: `removed ${a.email}` }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+
+    await box.registry.remove(a.id)
+
+    const text = await readFile(join(box.root, 'logs', 'app.log'), 'utf8')
+    expect(text).not.toContain('a@example.com')
+    expect(text).toContain('b@example.com')
   })
 
   it('moves the current account and can clear it', async () => {

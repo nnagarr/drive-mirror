@@ -26,8 +26,8 @@ export interface DriveMirrorApi {
   saveSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   /** Show a different account. */
   switchAccount(accountId: string): Promise<void>
-  /** Forget an account: its folder, its task, and its place on the list. */
-  forgetAccount(accountId: string): Promise<{ ok: boolean }>
+  /** Remove an account: its files, its copies and its place on the list. */
+  removeAccount(accountId: string): Promise<{ ok: boolean }>
   /** The current account's settings: its mirrors, its schedule, its notice. */
   getAccountSettings(accountId?: string): Promise<AccountSettings>
   saveAccountSettings(
@@ -100,8 +100,8 @@ const api: DriveMirrorApi = {
     ipcRenderer.invoke('drive-mirror:save-app-settings', patch),
   switchAccount: (accountId: string) =>
     ipcRenderer.invoke('drive-mirror:switch-account', accountId),
-  forgetAccount: (accountId: string) =>
-    ipcRenderer.invoke('drive-mirror:forget-account', accountId),
+  removeAccount: (accountId: string) =>
+    ipcRenderer.invoke('drive-mirror:remove-account', accountId),
   getAccountSettings: (accountId?: string) =>
     ipcRenderer.invoke('drive-mirror:get-account-settings', accountId),
   saveAccountSettings: (patch: Partial<AccountSettings>, accountId?: string) =>

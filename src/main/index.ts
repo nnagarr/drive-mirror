@@ -26,6 +26,7 @@ import { createAccountTokenStore } from './accountTokens'
 import { createAccountRegistry } from './accounts'
 import { migrateToAccounts } from './migrate'
 import { accountDir, accountManifestPath, appBackupDir } from './accountPaths'
+import { stripAccountFromLog } from './logFile'
 import { registerIpc } from './ipc'
 import { createMainWindow, appIconPath } from './window'
 import { createRunner } from './runner'
@@ -106,6 +107,9 @@ const accountRegistry = createAccountRegistry({
   saveAppSettings: saveSettings,
   accountSettings: accountSettingsStore,
   tokens: accountTokenStore,
+  // Removing an account has to reach the copies outside its folder too.
+  backupPaths: () => backupPaths(),
+  stripLog: (account) => stripAccountFromLog(join(appDataDir(), 'logs'), account),
 })
 
 /**
@@ -513,16 +517,27 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         // with it: the mirrors, the schedule, the notice.
         await accountRegistry.setCurrent(accountId)
       },
-      async forgetAccount(accountId: string) {
-        // The account's folder goes, and so does its Windows task: a task
-        // that outlives its account keeps firing.
+      async removeAccount(accountId: string) {
+        // A run that is still writing has to finish first: deleting the
+        // folder under it would let it write the manifest back.
         const app = await currentSettings()
         const account = app.accounts.find((a) => a.id === accountId)
-        if (account) await unregisterTask(account.email)
+        if (!account) return
+
+        // No new run may start while the removal waits.
         schedulers.get(accountId)?.stop()
+        await runner.whenIdle(accountId)
+
+        // The run's last lines are on the disk before the log is cleaned,
+        // or the pending writes would land after the cleaning.
+        await logger.flush()
+
+        // A task that outlives its account keeps firing.
+        await unregisterTask(account.email)
+
         schedulers.delete(accountId)
         clients.delete(accountId)
-        await accountRegistry.forget(accountId)
+        await accountRegistry.remove(accountId)
       },
       async signOut(accountId: string) {
         // The sign-in goes; the manifest, the mirrors and the schedule

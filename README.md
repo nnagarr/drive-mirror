@@ -148,10 +148,13 @@ and everything you see belongs to it.
 - **Sign out of this account** forgets the sign-in and nothing else. The
   folders, the schedule and the file list stay, so signing back in restores
   the account exactly as it was.
-- **Forget this account** deletes the account's folder and its scheduled
-  task, for good. The copies of its manifest in the backup folders are
-  kept, so the file list can be recovered by hand. The files already on
-  Drive are not touched.
+- **Remove this account** deletes everything the app kept for it: its folder
+  (file list, schedule, sign-in and history), the copies of its manifest in
+  every backup folder, its lines in the app log and its scheduled task. None
+  of it is archived. The files on this computer and on Drive are not touched.
+  Removing the last account leaves the app empty, ready for another sign-in.
+  Adding the same address again starts a new account with no memory of the
+  old one, so its files are uploaded again.
 - **Reset the connection** (Settings) signs every account out and forgets
   the client id and the secret. Every manifest, folder list and schedule
   stays.
