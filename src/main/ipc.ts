@@ -67,6 +67,8 @@ export interface RunSummary {
 
 /** The whole state of the app. */
 export interface AppState {
+  /** The account this state is about. */
+  accountId: string
   mirrors: MirrorCard[]
   running: boolean
   phase: string

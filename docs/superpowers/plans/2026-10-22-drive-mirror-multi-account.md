@@ -1707,7 +1707,7 @@ has to be able to make an account, so the registry has to exist. Splitting
 them leaves the tree in a state where the app does not build, so they were
 done together, and the registry's own tests came after.
 
-The reasons are recorded as rulings 29 and 30 in
+The reasons are recorded as ruling 29 in
 `docs/superpowers/decisions/2026-10-21-v2-rulings.md`, and the ledger for
 this plan records the rest.
 

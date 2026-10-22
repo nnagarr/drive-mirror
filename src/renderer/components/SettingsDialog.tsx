@@ -39,6 +39,8 @@ export function SettingsDialog({
   const [clientId, setClientId] = useState(settings.clientId)
   const [clientSecret, setClientSecret] = useState('')
   const [guardThreshold, setGuardThreshold] = useState(settings.guardThreshold)
+  const [startWithWindows, setStartWithWindows] = useState(settings.startWithWindows)
+  const [extraBackupPath, setExtraBackupPath] = useState(settings.extraBackupPath ?? '')
   const [status, setStatus] = useState<string | null>(null)
   const currentAccount =
     settings.accounts.find((account) => account.id === settings.currentAccountId) ?? null
@@ -67,6 +69,8 @@ export function SettingsDialog({
       await window.driveMirror.saveSettings({
         clientId,
         guardThreshold: Math.max(1, Math.floor(guardThreshold)),
+        startWithWindows,
+        extraBackupPath: extraBackupPath.trim().length > 0 ? extraBackupPath.trim() : null,
       })
       setStatus('Saved.')
     } catch (err) {
@@ -267,12 +271,33 @@ export function SettingsDialog({
 
         <section className="dialog__section">
           <h3>Where things are kept</h3>
-          <dl className="field__paths">
-            <div>
-              <dt>Extra copy of the manifest</dt>
-              <dd>{settings.extraBackupPath ?? 'none'}</dd>
-            </div>
-          </dl>
+          <label className="field">
+            <span className="field__label">Extra copy of the manifest</span>
+            <input
+              className="field__input"
+              value={extraBackupPath}
+              spellCheck={false}
+              onChange={(event) => setExtraBackupPath(event.target.value)}
+              placeholder="a folder on another disk"
+            />
+            <span className="field__hint">
+              One more place to keep a copy of every account's manifest. Leave it empty
+              for none. A copy on another disk is the one that survives this disk failing.
+            </span>
+          </label>
+          <label className="field">
+            <span className="field__label">Start with Windows</span>
+            <input
+              className="field__input field__input--check"
+              type="checkbox"
+              checked={startWithWindows}
+              onChange={(event) => setStartWithWindows(event.target.checked)}
+            />
+            <span className="field__hint">
+              The app starts when you sign in, so a schedule runs even when you have not
+              opened it.
+            </span>
+          </label>
         </section>
 
         <section className="dialog__section">

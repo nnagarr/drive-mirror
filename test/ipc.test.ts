@@ -72,6 +72,7 @@ function stubDeps(): IpcDeps {
         reports: [],
       }),
       state: async (_accountId: string) => ({
+        accountId: _accountId,
         mirrors: [],
         running: false,
         phase: 'idle',
@@ -142,6 +143,7 @@ describe('the IPC surface', () => {
     deps.runner.state = async (accountId: string) => {
       seen.push(accountId)
       return {
+        accountId: 'acc_test',
         mirrors: [],
         running: false,
         phase: 'idle',

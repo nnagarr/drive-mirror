@@ -29,7 +29,7 @@
  * no restart in between.
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream, statSync } from 'node:fs'
 import { mkdir, open, readFile, rm, stat, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -138,7 +138,7 @@ export interface RunnerDeps {
    * itself is fine, but the user should be able to find out that their
    * safety net was not refreshed.
    */
-  log?: (message: string) => void
+  log?: (message: string, account?: string) => void
 }
 
 /** The runner's public surface. */
@@ -309,6 +309,7 @@ export function createRunner(deps: RunnerDeps): Runner {
   ): AppState {
     const state = stateFor(accountId)
     return {
+      accountId,
       mirrors: configuredMirrors(settings).map((config) => {
         const mirrorCard = card(accountId, config.name)
         mirrorCard.localRoot = config.root
@@ -642,7 +643,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     const locked = await takeLock(accountId)
     if (!locked) {
       const message = 'another sync was already running, so this run was skipped'
-      note(deps.log, message)
+      note(deps.log, message, account.email)
       const skipped = emptySummary()
       // The run did nothing, but the user has to be told that. A summary
       // with no numbers reads as "everything is up to date", which is the
@@ -698,7 +699,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           `this manifest belongs to ${owner}, but you are signed in as ${signedIn}. ` +
           'Start a new manifest for this account before syncing.'
         deps.emit({ type: 'error', accountId, message })
-        note(deps.log, message)
+        note(deps.log, message, account.email)
         summary.errors = 1
         summary.reports.push({ code: 'anomaly', relPath: '', message })
         return summary
@@ -997,7 +998,10 @@ export function createRunner(deps: RunnerDeps): Runner {
       // is then between the file that is there and the file that is
       // coming - which works for a Google-native file too, where Drive
       // has no hash of its own to compare against.
-      const tempPath = join(appDataDir(), `recovered-${driveFileId}.tmp`)
+      const tempPath = join(
+      appDataDir(),
+      `recovered-${driveFileId}-${randomBytes(4).toString('hex')}.tmp`,
+    )
       try {
         const native = exportInfoFor(record.driveMimeType)
         if (native) {
@@ -1213,7 +1217,7 @@ export async function writeBackups(
   paths: string[],
   manifest: Manifest,
   email: string,
-  log?: (message: string) => void,
+  log?: (message: string, account?: string) => void,
 ): Promise<{ written: string[]; failed: string[] }> {
   const written: string[] = []
   const failed: string[] = []
@@ -1247,9 +1251,13 @@ export async function writeBackups(
  *
  * A logger that cannot be written is not a reason to fail a sync.
  */
-function note(log: ((message: string) => void) | undefined, message: string): void {
+function note(
+  log: ((message: string, account?: string) => void) | undefined,
+  message: string,
+  account?: string,
+): void {
   try {
-    log?.(message)
+    log?.(message, account)
   } catch {
     // The message is lost, and the run goes on.
   }

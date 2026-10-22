@@ -444,7 +444,8 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       // The lock that stops a scheduled run and this window from writing
       // the manifest at the same time.
       lockPath: join(appDataDir(), 'sync.lock'),
-      log: (message: string) => logger.log({ level: 'warn', message }),
+      log: (message: string, account?: string) =>
+        logger.log({ level: 'warn', message, account }),
     })
 
     /**
@@ -527,6 +528,18 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         // The sign-in goes; the manifest, the mirrors and the schedule
         // stay, so signing back in restores the account exactly as it was.
         await accountTokenStore.clear(accountId)
+        // The account on screen is signed out, so the app moves to
+        // another one that is signed in, if there is one.
+        const app = await currentSettings()
+        if (app.currentAccountId !== accountId) return
+        const others = app.accounts.filter((account) => account.id !== accountId)
+        for (const other of others) {
+          if (await accountTokenStore.has(other.id)) {
+            await accountRegistry.setCurrent(other.id)
+            return
+          }
+        }
+        await accountRegistry.setCurrent(others[0]?.id ?? null)
       },
       async openLogFolder() {
         await shell.openPath(join(appDataDir(), 'logs'))
@@ -608,15 +621,29 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       // measured from this one.
       const accounts = (await currentSettings()).accounts
       const named = cli.accountId
-      const targets = named
-        ? accounts.filter((account) => account.id === named)
-        : accounts
-      for (const account of targets) {
+      if (named && !accounts.some((account) => account.id === named)) {
+        // Nothing is run, and the reason is said out loud: a scheduled
+        // run that did nothing looks like a run that found nothing to do.
+        logger.log({
+          level: 'warn',
+          message: `there is no account with the id ${named}, so nothing was run`,
+        })
+        app.quit()
+        return
+      }
+      for (const account of accounts) {
+        if (named && account.id !== named) continue
         const settings = await accountSettingsFor(account.id)
         if (!settings.schedule.enabled) {
           // The schedule was switched off, or was never turned on. The
           // task has to go, or it will keep firing.
           await unregisterTask(account.email)
+          continue
+        }
+        if (!named && settings.schedule.mechanism !== 'windows-task') {
+          // Without an account named, this is the old task firing, and
+          // the old task belonged to the accounts that use a Windows task.
+          // The others run from the app's own timer.
           continue
         }
         await schedulerFor(account.id, account.email).runNow()

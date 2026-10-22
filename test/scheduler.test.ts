@@ -13,6 +13,8 @@ function harness(
     lastRunAt?: string | null
     now?: Date
     taskExists?: boolean
+    /** Whether the run is given up on, as it is when another account is syncing. */
+    skipped?: boolean
   } = {},
 ) {
   const settings: AccountSettings = {
@@ -50,10 +52,11 @@ function harness(
         updated: 0,
         downloaded: 0,
         trashed: 0,
-        errors: 0,
+        errors: options.skipped ? 1 : 0,
         mirrors: [],
         changed: [],
         reports: [],
+        ...(options.skipped ? { skipped: true as const } : {}),
       }
     },
     now: (): Date => options.now ?? new Date('2026-03-01T10:00:00'),
@@ -85,6 +88,26 @@ describe('the scheduler', () => {
     await s.start()
 
     expect(h.calls.runs).toBe(0)
+  })
+
+  it('retries a slot that was missed, and does not move the clock', async () => {
+    const h = harness({
+      shape: { kind: 'every-hours', everyHours: 6 },
+      lastRunAt: new Date('2026-03-01T00:00:00').toISOString(),
+      now: new Date('2026-03-01T20:00:00'),
+      skipped: true,
+    })
+    const s = createScheduler(h.deps)
+
+    await s.start()
+
+    // The run was given up on, so the clock stays where it was and the
+    // slot is caught up rather than lost.
+    expect(h.calls.runs).toBe(1)
+    expect(h.settings.schedule.lastRunAt).toBe(new Date('2026-03-01T00:00:00').toISOString())
+    // And the timer is armed again, for the slot that was missed.
+    expect(h.calls.armed).toBeGreaterThan(0)
+    expect(h.calls.notifications.join(' ')).toContain('another sync was already running')
   })
 
   it('runs once when a run was missed', async () => {

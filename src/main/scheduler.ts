@@ -76,23 +76,39 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   let mechanism: ScheduleConfig['mechanism'] = 'in-app'
   let lastRunAt: string | null = null
   let nextRun: Date | null = null
+  /**
+   * The slot the timer is armed for.
+   *
+   * A slot that was missed because another account was syncing is retried
+   * as soon as the lock is free, and this is the slot it was.
+   */
+  let dueAt: Date | null = null
   let stopResume: (() => void) | null = null
 
-  /** Arm the timer for the next slot. */
-  function arm(): void {
+  /**
+   * Arm the timer for the next slot.
+   *
+   * A slot that was given up on is armed again with `retryAt`, so the work
+   * happens as soon as the other account is finished rather than a whole
+   * period later.
+   */
+  function arm(retryAt?: Date): void {
     if (!shape) return
-    nextRun = nextFireAt(shape, deps.now(), lastRunAt)
+    const now = deps.now()
+    nextRun = retryAt ?? nextFireAt(shape, now, lastRunAt)
+    dueAt = nextRun
     if (timer !== null) {
       deps.clearTimer(timer)
       timer = null
     }
-    const wait = Math.max(0, nextRun.getTime() - deps.now().getTime())
+    const wait = Math.max(0, nextRun.getTime() - now.getTime())
     timer = deps.setTimer(() => {
       void runNow()
     }, wait)
     // The next run is shown in the interface, so it has to be written
-    // down.
-    void persist({ nextRunAt: nextRun.toISOString() })
+    // down. A slot being retried is already past, so the next run is now.
+    const shown = nextRun.getTime() > now.getTime() ? nextRun : now
+    void persist({ nextRunAt: shown.toISOString() })
   }
 
   /** Save part of the schedule. */
@@ -112,10 +128,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           'The scheduled sync did not run',
           'another sync was already running, so this slot was missed',
         )
-      } else {
-        lastRunAt = deps.now().toISOString()
-        await persist({ lastRunAt })
+        // The slot is retried as soon as the lock is free, rather than
+        // waiting a whole period for the next one. The retry waits for
+        // the lock in its turn, so the work is not lost.
+        if (mechanism === 'in-app') arm(dueAt ?? deps.now())
+        return
       }
+      lastRunAt = deps.now().toISOString()
+      await persist({ lastRunAt })
     } catch (err) {
       // The user is not watching when a scheduled run happens, so a
       // failure that nobody hears about is a backup that quietly stopped.
@@ -211,10 +231,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // A run that was missed - the machine was off, or the user was not
       // signed in - happens once, now.
       if (catchUpIsDue()) {
+        // The run arms the timer itself: with the next slot, or with a
+        // retry of the missed one.
         await runNow()
-      }
-
-      if (schedule.mechanism === 'in-app') {
+      } else if (schedule.mechanism === 'in-app') {
         arm()
       }
 

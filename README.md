@@ -78,8 +78,9 @@ costs a sign-in, not another trip to the console.
 
 ## Using it
 
-Open **Settings**, paste the client id and secret, press **Test connection**,
-and complete the sign-in in the browser that opens. Then press **Sync now**.
+Open **Settings**, paste the client id and secret, press **Connect an
+account**, and complete the sign-in in the browser that opens. Then press
+**Sync now**.
 
 - **Sync now** syncs every folder that is enabled.
 - **Sync this folder** on a card syncs just that one.
