@@ -18,6 +18,10 @@ import type { AccountSettings } from './accountSettings'
 
 /** What the scheduler needs from the outside world. */
 export interface SchedulerDeps {
+  /** The account this scheduler runs. */
+  accountId: string
+  /** The address of that account, which its Windows task is named after. */
+  accountEmail: string
   /** The account's settings as they are now. */
   settings(): Promise<AccountSettings>
   /** Save part of the account's settings. */
@@ -100,9 +104,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   /** Do the run, and remember when it happened. */
   async function doRun(): Promise<void> {
     try {
-      await deps.runSync()
-      lastRunAt = deps.now().toISOString()
-      await persist({ lastRunAt })
+      const summary = await deps.runSync()
+      if (summary.skipped) {
+        // The run did not happen: another account was syncing. The clock
+        // must not move, or the slot is lost and never caught up.
+        deps.notify(
+          'The scheduled sync did not run',
+          'another sync was already running, so this slot was missed',
+        )
+      } else {
+        lastRunAt = deps.now().toISOString()
+        await persist({ lastRunAt })
+      }
     } catch (err) {
       // The user is not watching when a scheduled run happens, so a
       // failure that nobody hears about is a backup that quietly stopped.

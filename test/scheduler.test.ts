@@ -34,6 +34,8 @@ function harness(
   }
 
   const deps = {
+    accountId: 'acc_test',
+    accountEmail: 'user@example.com',
     settings: async (): Promise<AccountSettings> => settings,
     saveSettings: async (patch: Partial<AccountSettings>): Promise<AccountSettings> => {
       Object.assign(settings, patch)

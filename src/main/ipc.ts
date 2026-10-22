@@ -111,7 +111,7 @@ export interface IpcDeps {
   /** Archive the manifest and start a new one, for a different account. */
   startFreshManifest(): Promise<void>
   /** Take a new schedule into account, without waiting for a restart. */
-  applySchedule(): Promise<void>
+  applySchedule(accountId: string): Promise<void>
   /** Start the app with Windows, or stop doing so. */
   applyAutoLaunch(enabled: boolean): void
   /** Called when the run as a whole fails. */
@@ -327,7 +327,7 @@ export function registerIpc(deps: IpcDeps): void {
       const next = { ...settings.schedule, ...patch }
       await deps.saveAccountSettings(accountId, { schedule: next })
       // The app has to act on the change now, not at the next start-up.
-      await deps.applySchedule()
+      await deps.applySchedule(accountId)
       return next
     },
   )

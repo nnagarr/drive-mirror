@@ -30,9 +30,11 @@ import { registerIpc } from './ipc'
 import { createMainWindow, appIconPath } from './window'
 import { createRunner } from './runner'
 import type { AccountRuntime } from './runner'
-import { createScheduler } from './scheduler'
+import { createScheduler } from './scheduler'
+import type { Scheduler } from './scheduler'
 import { setPendingNotice } from './notice'
-import { registerTask, taskExists, unregisterTask } from './taskScheduler'
+import { registerTask, taskExists, unregisterLegacyTask, unregisterTask } from './taskScheduler'
+import { parseCli } from './cli'
 import type { AppEvent } from './ipc'
 import type { OAuthTokens } from '../drive/oauth'
 
@@ -225,14 +227,6 @@ async function saveAccountSettingsFor(
   return next
 }
 
-/** Save part of the current account's settings. */
-async function saveCurrentAccountSettings(
-  patch: Partial<AccountSettings>,
-): Promise<AccountSettings> {
-  const id = await currentAccountId()
-  if (!id) throw new Error('no account is selected')
-  return saveAccountSettingsFor(id, patch)
-}
 
 /** Where copies of the manifest are kept. */
 async function backupPaths(): Promise<string[]> {
@@ -372,7 +366,8 @@ function waitForCode(
  * just because the window happens to be open. The lock *file*, not the
  * instance lock, is what stops two runs at once.
  */
-const syncOnce = process.argv.includes('--sync-once')
+const cli = parseCli(process.argv)
+const syncOnce = cli.syncOnce
 
 if (!syncOnce && !app.requestSingleInstanceLock()) {
   app.quit()
@@ -412,7 +407,7 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       root: appDataDir(),
       writeAppSettings: (settings) => settingsStore.write(settings),
       unregisterLegacyTask: async () => {
-        await unregisterTask()
+        await unregisterLegacyTask()
       },
       log: (message: string) => logger.log({ level: 'info', message }),
     })
@@ -451,32 +446,30 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       log: (message: string) => logger.log({ level: 'warn', message }),
     })
 
-    const scheduler = createScheduler({
-      settings: () => currentAccountSettings(),
-      saveSettings: saveCurrentAccountSettings,
-      runSync: async () => {
-        const id = await currentAccountId()
-        if (!id) {
-          const now = new Date().toISOString()
-          return {
-            startedAt: now,
-            finishedAt: now,
-            uploaded: 0,
-            updated: 0,
-            downloaded: 0,
-            trashed: 0,
-            errors: 0,
-            mirrors: [],
-            changed: [],
-            reports: [],
-          }
-        }
-        return runner.syncNow(id)
-      },
-      now: () => new Date(),
-      registerTask,
-      unregisterTask,
-      taskExists,
+    /**
+     * The schedulers, one per account.
+     *
+     * Each account has its own schedule, its own in-app timer and its own
+     * Windows task, named after the account, so two accounts can run at
+     * their own times.
+     */
+    const schedulers = new Map<string, Scheduler>()
+
+    /** The scheduler for an account, made the first time it is needed. */
+    function schedulerFor(id: string, email: string): Scheduler {
+      const existing = schedulers.get(id)
+      if (existing) return existing
+      const scheduler = createScheduler({
+        accountId: id,
+        accountEmail: email,
+        settings: () => accountSettingsFor(id),
+        saveSettings: (patch) => saveAccountSettingsFor(id, patch),
+        runSync: () => runner.syncNow(id),
+        now: () => new Date(),
+        registerTask: (shape, exePath, nextRunAt) =>
+          registerTask(shape, exePath, nextRunAt, id, email),
+        unregisterTask: () => unregisterTask(email),
+        taskExists: () => taskExists(email),
       // The executable the Windows task launches. In development this is
       // Electron's own binary, which is why the task is only for the
       // packaged app.
@@ -492,7 +485,10 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
           new Notification({ title, body }).show()
         }
       },
-    })
+      })
+      schedulers.set(id, scheduler)
+      return scheduler
+    }
 
     registerIpc({
       runner,
@@ -568,7 +564,12 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         )
         await store.write(emptyManifest())
       },
-      applySchedule: () => scheduler.applySchedule(),
+      applySchedule: async (accountId: string) => {
+        const app = await currentSettings()
+        const account = app.accounts.find((a) => a.id === accountId)
+        if (!account) return
+        await schedulerFor(account.id, account.email).applySchedule()
+      },
       applyAutoLaunch(enabled: boolean) {
         // In development the executable is Electron's own, which is not
         // something to start with Windows.
@@ -584,15 +585,21 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       // The Windows task's launch: one sync, no window, then out. The
       // scheduler records when the run happened, so the next slot is
       // measured from this one.
-      const account = await currentAccountSettings()
-      if (!account.schedule.enabled) {
-        // The schedule was switched off, or was never turned on. The task
-        // has to go, or it will keep firing.
-        await unregisterTask()
-        app.quit()
-        return
+      const accounts = (await currentSettings()).accounts
+      const named = cli.accountId
+      const targets = named
+        ? accounts.filter((account) => account.id === named)
+        : accounts
+      for (const account of targets) {
+        const settings = await accountSettingsFor(account.id)
+        if (!settings.schedule.enabled) {
+          // The schedule was switched off, or was never turned on. The
+          // task has to go, or it will keep firing.
+          await unregisterTask(account.email)
+          continue
+        }
+        await schedulerFor(account.id, account.email).runNow()
       }
-      await scheduler.runNow()
       app.quit()
       return
     }
@@ -612,9 +619,12 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
     // It does not any more, so the folder goes.
     await clearSupersededStore()
 
-    // The schedule starts last, so a run that was missed while the app
+    // The schedules start last, so a run that was missed while the app
     // was closed happens after the window is up and can say so.
-    await scheduler.start()
+    const accounts = (await currentSettings()).accounts
+    for (const account of accounts) {
+      await schedulerFor(account.id, account.email).start()
+    }
   })
 
   app.on('window-all-closed', () => {
