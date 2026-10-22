@@ -163,6 +163,54 @@ way it is actually called; the plan referred to a ruling that does not exist.
 
 ---
 
+## What the review set aside, and what I decided about each
+
+The review listed the things it would not judge. Each one is a decision, so
+each one is decided here rather than left dangling.
+
+**Downgrade support.** An older build writing the old manifest after the
+migration would be ignored, and the mirrors would be lost. *Decided:* out of
+scope. The spec chooses this design for the public app, not for the install
+that exists, and the migration keeps the old files in `legacy\` where a
+person can find them. *Cost if wrong:* a user who runs an old build after the
+upgrade has to re-add their mirrors.
+
+**The `isRunMissed` and `nextFireAt` arithmetic in `src/core/schedule.ts`.**
+Untouched by this branch. *Decided:* left alone. The scheduler now retries a
+missed slot itself, and the core's arithmetic is still the arithmetic it
+always was. *Cost if wrong:* none.
+
+**The renderer having no test setup.** The plan forbids adding one.
+*Decided:* kept. The renderer is verified by the typecheck, the build and
+the IPC contract it uses. *Cost if wrong:* a mistake in the interface is
+found by a person, not by a test.
+
+**The task builder's names.** The plan called them `buildCreateArgs` and
+`buildDeleteArgs`; they are `buildSchtasksArgs` and `buildDeleteArgs(email)`.
+*Decided:* the plan's names could not carry the address the task name needs,
+and the behaviour matches the spec. *Cost if wrong:* two names differ from
+the plan's.
+
+**`AppSettings.clientId`.** Not in the spec's §6.1, but §6.1's note keeps
+it as a read-only projection of the credential store. *Decided:* kept. The
+interface needs the client id to show it, and it is never written to the
+file. *Cost if wrong:* one field more than the spec lists.
+
+**"Forget this account" deleting permanently rather than archiving.** The
+user's recorded choice. *Decided:* kept. *Cost if wrong:* the app forgets
+which files it uploaded, so adding the same folder again re-uploads
+everything. The copies of the manifest in the backup folders survive.
+
+**Shared drives, service accounts, domain-wide delegation, per-mirror
+schedules, and a "sync every account at once" button.** *Decided:* out of
+scope; they are the spec's explicit non-goals. *Cost if wrong:* none.
+
+**The recovered file's temporary name.** Pre-existing at the base commit, and
+now fixed anyway: the name carries a random suffix, so two runs cannot
+share it. *Cost if wrong:* none.
+
+---
+
 ## The state at the end
 
 - The suite: **424 tests, 29 files, all passing**. The typecheck and the
