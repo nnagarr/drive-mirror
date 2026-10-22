@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createDriveClient } from '../drive/httpClient'
+import type { DriveClient } from '../drive/client'
 import { buildAuthUrl, exchangeCode, refreshAccessToken } from '../drive/oauth'
 import { createLogger } from '../core/logger'
 import { createManifestStore, emptyManifest } from '../core/manifest'
@@ -28,6 +29,7 @@ import { accountDir, accountManifestPath, appBackupDir } from './accountPaths'
 import { registerIpc } from './ipc'
 import { createMainWindow, appIconPath } from './window'
 import { createRunner } from './runner'
+import type { AccountRuntime } from './runner'
 import { createScheduler } from './scheduler'
 import { setPendingNotice } from './notice'
 import { registerTask, taskExists, unregisterTask } from './taskScheduler'
@@ -100,10 +102,14 @@ const accountRegistry = createAccountRegistry({
   tokens: accountTokenStore,
 })
 
-/** A valid access token, refreshed when it is about to expire. */
-async function accessToken(): Promise<string> {
-  const id = await currentAccountId()
-  if (!id) throw new Error('the app is not signed in')
+/**
+ * A valid access token for one account, refreshed when it is about to
+ * expire.
+ *
+ * The token and the refresh belong to the account, so one account's
+ * expiry cannot disturb another account's sign-in.
+ */
+async function accessTokenFor(id: string): Promise<string> {
   const tokens = await accountTokenStore.read(id)
   if (!tokens) throw new Error('the app is not signed in')
   if (tokens.expiry_date - Date.now() > 60_000) return tokens.access_token
@@ -127,7 +133,33 @@ async function accessToken(): Promise<string> {
   return next.access_token
 }
 
-const client = createDriveClient(accessToken)
+/** The Drive clients, one per account, so each has its own sign-in. */
+const clients = new Map<string, DriveClient>()
+
+/**
+ * Everything one account needs for a run.
+ *
+ * A Drive file id means nothing outside the account that can see it, so
+ * the client and the manifest both belong to the account.
+ */
+async function accountRuntime(id: string): Promise<AccountRuntime | null> {
+  const app = await currentSettings()
+  const record = app.accounts.find((account) => account.id === id)
+  if (!record) return null
+  let accountClient = clients.get(id)
+  if (!accountClient) {
+    accountClient = createDriveClient(() => accessTokenFor(id))
+    clients.set(id, accountClient)
+  }
+  return {
+    id: record.id,
+    email: record.email,
+    signedIn: await accountTokenStore.has(record.id),
+    client: accountClient,
+    store: createManifestStore(accountDir(appDataDir(), record.id)),
+    settings: () => accountSettingsStore.read(record.id),
+  }
+}
 
 /**
  * The settings as the user should see them.
@@ -159,13 +191,6 @@ async function saveSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
   return next
 }
 
-/** The current account's tokens, or null when it is not signed in. */
-async function currentAccountTokens(): Promise<OAuthTokens | null> {
-  const id = await currentAccountId()
-  if (!id) return null
-  return accountTokenStore.read(id)
-}
-
 /** The id of the account the app is showing, or null when there is none. */
 async function currentAccountId(): Promise<string | null> {
   const app = await currentSettings()
@@ -184,23 +209,29 @@ async function currentAccountSettings(): Promise<AccountSettings> {
   return accountSettingsStore.read(id)
 }
 
-/** Save part of the current account's settings. */
-async function saveAccountSettings(
+/** One account's settings. */
+async function accountSettingsFor(id: string): Promise<AccountSettings> {
+  return accountSettingsStore.read(id)
+}
+
+/** Save part of one account's settings. */
+async function saveAccountSettingsFor(
+  id: string,
   patch: Partial<AccountSettings>,
 ): Promise<AccountSettings> {
-  const id = await currentAccountId()
-  if (!id) throw new Error('no account is selected')
   const current = await accountSettingsStore.read(id)
   const next = { ...current, ...patch }
   await accountSettingsStore.write(id, next)
   return next
 }
 
-/** The current account's manifest store, rooted in the account's folder. */
-async function currentManifestStore() {
+/** Save part of the current account's settings. */
+async function saveCurrentAccountSettings(
+  patch: Partial<AccountSettings>,
+): Promise<AccountSettings> {
   const id = await currentAccountId()
   if (!id) throw new Error('no account is selected')
-  return createManifestStore(accountDir(appDataDir(), id))
+  return saveAccountSettingsFor(id, patch)
 }
 
 /** Where copies of the manifest are kept. */
@@ -395,41 +426,53 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
     if (accountSettings.mirrors.length === 0) {
       const id = await currentAccountId()
       if (id) {
-        const manifest = await (await currentManifestStore()).read()
+        const manifest = await createManifestStore(accountDir(appDataDir(), id)).read()
         const recovered = mirrorConfigsFromManifest(manifest)
         if (recovered.length > 0) {
-          await saveAccountSettings({ mirrors: recovered })
+          await saveAccountSettingsFor(id, { mirrors: recovered })
         }
       }
     }
 
     const runner = createRunner({
-      // The client and the manifest belong to the account being run.
-      client: async () => client,
-      store: () => currentManifestStore(),
-      // The settings are read when a run starts, so a folder the user adds
-      // while the app is open is mirrored by the next run.
-      settings: () => currentAccountSettings(),
+      // The account to run, and everything it needs.
+      account: (id) => accountRuntime(id),
       // The app's own settings: the guard threshold, the list of accounts.
       appSettings: () => currentSettings(),
       // Where copies of the manifest are kept.
       backupPaths: () => backupPaths(),
       // The runner writes the settings too, when a run resets the
       // missed-slot clock.
-      saveSettings: saveAccountSettings,
+      saveAccountSettings: (id, patch) => saveAccountSettingsFor(id, patch),
       emit,
       // The lock that stops a scheduled run and this window from writing
       // the manifest at the same time.
       lockPath: join(appDataDir(), 'sync.lock'),
       log: (message: string) => logger.log({ level: 'warn', message }),
-      hasCredentials: async () =>
-        Boolean(credentialStore.getClientId()) && (await currentAccountTokens()) !== null,
     })
 
     const scheduler = createScheduler({
       settings: () => currentAccountSettings(),
-      saveSettings: saveAccountSettings,
-      runSync: () => runner.syncNow(),
+      saveSettings: saveCurrentAccountSettings,
+      runSync: async () => {
+        const id = await currentAccountId()
+        if (!id) {
+          const now = new Date().toISOString()
+          return {
+            startedAt: now,
+            finishedAt: now,
+            uploaded: 0,
+            updated: 0,
+            downloaded: 0,
+            trashed: 0,
+            errors: 0,
+            mirrors: [],
+            changed: [],
+            reports: [],
+          }
+        }
+        return runner.syncNow(id)
+      },
       now: () => new Date(),
       registerTask,
       unregisterTask,
@@ -455,8 +498,9 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       runner,
       getSettings: () => currentSettings(),
       saveSettings,
-      getAccountSettings: () => currentAccountSettings(),
-      saveAccountSettings,
+      getAccountSettings: (id: string) => accountSettingsFor(id),
+      saveAccountSettings: (id, patch) => saveAccountSettingsFor(id, patch),
+      currentAccountId,
       async setCredentials(clientId, clientSecret) {
         try {
           await credentialStore.setCredentials(clientId, clientSecret)
@@ -466,19 +510,16 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         }
       },
       authenticate,
-      async signOut() {
+      async signOut(accountId: string) {
         // The sign-in goes; the manifest, the mirrors and the schedule
         // stay, so signing back in restores the account exactly as it was.
-        const id = await currentAccountId()
-        if (id) await accountTokenStore.clear(id)
+        await accountTokenStore.clear(accountId)
       },
       async openLogFolder() {
         await shell.openPath(join(appDataDir(), 'logs'))
       },
-      async showManifest() {
-        const id = await currentAccountId()
-        if (!id) return
-        await shell.openPath(accountManifestPath(appDataDir(), id))
+      async showManifest(accountId: string) {
+        await shell.openPath(accountManifestPath(appDataDir(), accountId))
       },
       async appIcon() {
         // The interface shows the icon in the top bar. It is sent as a
@@ -517,7 +558,7 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         if (!id) return
         const archiveDir = join(accountDir(appDataDir(), id), 'manifest-archive')
         await mkdir(archiveDir, { recursive: true })
-        const store = await currentManifestStore()
+        const store = createManifestStore(accountDir(appDataDir(), id))
         const manifest = await store.read()
         const stamp = new Date().toISOString().replace(/[:.]/g, '-')
         await writeFile(
@@ -560,11 +601,12 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
 
     // Fill in the file counts so the window shows the real trees before
     // the first run.
-    await runner.prime()
+    const currentId = await currentAccountId()
+    if (currentId) await runner.prime(currentId)
 
     // A mirror the user removed more than thirty days ago is forgotten:
     // its history goes, and the copy of the bytes it replaced stays.
-    await runner.pruneRemovedMirrors()
+    if (currentId) await runner.pruneRemovedMirrors(currentId)
 
     // Older versions of the app kept a copy of every file it replaced.
     // It does not any more, so the folder goes.

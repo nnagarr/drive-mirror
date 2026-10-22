@@ -53,12 +53,14 @@ import type {
   MirrorManifest,
   Report,
 } from '../core/types'
-import { emptyMirror, serialiseManifest } from '../core/manifest'
+import { emptyManifest, emptyMirror, serialiseManifest } from '../core/manifest'
 import type { ManifestStore } from '../core/manifest'
 import type { MirrorConfig } from '../core/mirrorConfig'
 import type { DriveClient } from '../drive/client'
 import { appDataDir } from './settings'
 import type { AppSettings } from './settings'
+import { defaultAccountSettings } from './accountSettings'
+
 import type { AccountSettings } from './accountSettings'
 import { backupDirFor } from './accountPaths'
 import type { AppEvent, AppState, MirrorCard, RunSummary } from './ipc'
@@ -72,12 +74,16 @@ const LOCK_STALE_MS = 6 * 60 * 60 * 1000
 /** How long a removed mirror is remembered before it is forgotten. */
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
 
-/** What the runner needs from the outside world. */
-export interface RunnerDeps {
-  /** The Drive client of the account being run. */
-  client: () => Promise<DriveClient>
-  /** The manifest store of the account being run. */
-  store: () => Promise<ManifestStore>
+/** Everything one account needs for a run. */
+export interface AccountRuntime {
+  id: string
+  email: string
+  /** Whether the account has a sign-in. */
+  signedIn: boolean
+  /** The Drive client of this account. */
+  client: DriveClient
+  /** This account's manifest store, rooted in the account's own folder. */
+  store: ManifestStore
   /**
    * The account's settings as they are now.
    *
@@ -86,6 +92,12 @@ export interface RunnerDeps {
    * see it without a restart.
    */
   settings: () => Promise<AccountSettings>
+}
+
+/** What the runner needs from the outside world. */
+export interface RunnerDeps {
+  /** The account to run, and everything it needs. */
+  account: (id: string) => Promise<AccountRuntime | null>
   /**
    * The app's own settings as they are now.
    *
@@ -108,8 +120,17 @@ export interface RunnerDeps {
   lockPath?: string
   /** Whether the app holds usable credentials. */
   hasCredentials?: () => boolean | Promise<boolean>
-  /** Save part of the account's settings. */
-  saveSettings?: (patch: Partial<AccountSettings>) => Promise<AccountSettings>
+  /** Save part of an account's settings. */
+  saveAccountSettings?: (id: string, patch: Partial<AccountSettings>) => Promise<AccountSettings>
+  /**
+   * How long to keep trying for the lock before a run is given up on.
+   *
+   * Two accounts never sync at the same time, so a run that arrives while
+   * the other one is going waits rather than being dropped.
+   */
+  lockWait?: { attempts: number; intervalMs: number }
+  /** Waiting, in a way a test can stand in for. */
+  sleep?: (ms: number) => Promise<void>
   /**
    * Where a message about the run that is not an error goes.
    *
@@ -122,10 +143,14 @@ export interface RunnerDeps {
 
 /** The runner's public surface. */
 export interface Runner {
-  syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }): Promise<RunSummary>
-  state(): Promise<AppState>
+  syncNow(
+    accountId: string,
+    mirrorName?: string,
+    options?: { overrideGuard?: boolean },
+  ): Promise<RunSummary>
+  state(accountId: string): Promise<AppState>
   /** Fill in the file counts without syncing anything. */
-  prime(): Promise<void>
+  prime(accountId: string): Promise<void>
   /**
    * Approve a new volume for a mirror.
    *
@@ -133,7 +158,7 @@ export interface Runner {
    * They become retired records, and the next run merges the two sides
    * with the Drive copy winning - the only surviving version of the work.
    */
-  rebase(mirrorName: string): Promise<void>
+  rebase(accountId: string, mirrorName: string): Promise<void>
 
   /**
    * Move a mirror's folder on Drive to a new destination.
@@ -142,6 +167,7 @@ export interface Runner {
    * manifest keeps working and nothing is uploaded again.
    */
   moveMirrorDestination(
+    accountId: string,
     mirrorName: string,
     drivePath: string,
   ): Promise<{ ok: true } | { ok: false; message: string }>
@@ -152,7 +178,7 @@ export interface Runner {
    * Their history goes: the file list, the retired records, the counts.
    * The files on Drive are not touched.
    */
-  pruneRemovedMirrors(): Promise<number>
+  pruneRemovedMirrors(accountId: string): Promise<number>
 
   /**
    * Pull a restored file back down to the disk.
@@ -162,9 +188,24 @@ export interface Runner {
    * path and it is not the same file, the download is refused.
    */
   downloadRestored(
+    accountId: string,
     mirrorName: string,
     driveFileId: string,
   ): Promise<{ ok: true; path: string } | { ok: false; message: string }>
+}
+
+/** What the runner remembers about one account. */
+interface AccountState {
+  /** One card per mirror this account has. */
+  cards: Map<string, MirrorCard>
+  /** The last run this account had. */
+  lastRun: RunSummary | null
+  /** Whether a run is going. */
+  running: boolean
+  /** Where the run has got to. */
+  phase: string
+  /** The run that is going, when there is one. */
+  inFlight: Promise<RunSummary> | null
 }
 
 /** The counts a mirror reports. */
@@ -185,16 +226,56 @@ function noCounts(): Counts {
  * Create the runner.
  */
 export function createRunner(deps: RunnerDeps): Runner {
-  const cards = new Map<string, MirrorCard>()
-  const lastRun: { value: RunSummary | null } = { value: null }
-  const running = { value: false }
-  const phase = { value: 'idle' }
-  /** The run that is going, when there is one. */
-  let inFlight: Promise<RunSummary> | null = null
+  /**
+   * What the runner remembers about each account.
+   *
+   * Two accounts can hold a mirror with the same name, and each has to
+   * show its own counts, its own status and its own last run. So the
+   * memory is kept per account, not per mirror.
+   */
+  const states = new Map<string, AccountState>()
   const lockPath = deps.lockPath ?? defaultLockPath()
 
+  /** What is remembered about one account. */
+  function stateFor(id: string): AccountState {
+    let state = states.get(id)
+    if (!state) {
+      state = {
+        cards: new Map<string, MirrorCard>(),
+        lastRun: null,
+        running: false,
+        phase: 'idle',
+        inFlight: null,
+      }
+      states.set(id, state)
+    }
+    return state
+  }
+
+  /**
+   * Take the lock, waiting for it when another account has it.
+   *
+   * Two accounts never sync at the same time. A run that arrives while the
+   * other one is going waits rather than being dropped, and the user is
+   * told it is waiting.
+   */
+  async function takeLock(accountId: string): Promise<boolean> {
+    const wait = deps.lockWait ?? { attempts: 5, intervalMs: 60_000 }
+    const sleep =
+      deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+    for (let attempt = 0; attempt < wait.attempts; attempt++) {
+      const locked = await acquireSyncLock(lockPath, new Date())
+      if (locked) return true
+      stateFor(accountId).phase = 'waiting'
+      emitState(accountId)
+      await sleep(wait.intervalMs)
+    }
+    return false
+  }
+
   /** The card for a mirror, created when it is not known yet. */
-  function card(name: string): MirrorCard {
+  function card(accountId: string, name: string): MirrorCard {
+    const cards = stateFor(accountId).cards
     const existing = cards.get(name)
     if (existing) return existing
     const created: MirrorCard = {
@@ -212,13 +293,6 @@ export function createRunner(deps: RunnerDeps): Runner {
     return created
   }
 
-  /** Whether the app is signed in, and as whom. */
-  const auth = { signedIn: false, email: null as string | null }
-
-  async function refreshAuth(): Promise<void> {
-    auth.signedIn = deps.hasCredentials ? Boolean(await deps.hasCredentials()) : false
-    auth.email = currentAccountEmail(await deps.appSettings())
-  }
 
   /**
    * The state of the app, as the interface sees it.
@@ -227,10 +301,16 @@ export function createRunner(deps: RunnerDeps): Runner {
    * cards are only what the last run learned about them. A mirror the user
    * added a moment ago therefore has a card at once.
    */
-  function buildState(settings: AccountSettings, manifest: Manifest): AppState {
+  function buildState(
+    accountId: string,
+    account: AccountRuntime | null,
+    settings: AccountSettings,
+    manifest: Manifest,
+  ): AppState {
+    const state = stateFor(accountId)
     return {
       mirrors: configuredMirrors(settings).map((config) => {
-        const mirrorCard = card(config.name)
+        const mirrorCard = card(accountId, config.name)
         mirrorCard.localRoot = config.root
         mirrorCard.drivePath = `My Drive/${config.drivePath}`
         mirrorCard.enabled = config.enabled
@@ -256,22 +336,24 @@ export function createRunner(deps: RunnerDeps): Runner {
           })
         return { ...mirrorCard }
       }),
-      running: running.value,
-      phase: phase.value,
-      lastRun: lastRun.value,
-      accountEmail: auth.email,
-      needsAuth: !auth.signedIn,
+      running: state.running,
+      phase: state.phase,
+      lastRun: state.lastRun,
+      accountEmail: account?.email ?? null,
+      needsAuth: !(account?.signedIn ?? false),
     }
   }
 
-  function emitState(): void {
+  function emitState(accountId: string): void {
     void (async () => {
       try {
-        await refreshAuth()
-        const settings = await deps.settings()
-        const store = await deps.store()
-        const manifest = await store.read()
-        deps.emit({ type: 'state', state: buildState(settings, manifest) })
+        const account = await deps.account(accountId)
+        const settings = account ? await account.settings() : defaultAccountSettings()
+        const manifest = account ? await account.store.read() : emptyManifest()
+        deps.emit({
+          type: 'state',
+          state: buildState(accountId, account, settings, manifest),
+        })
       } catch {
         // The state event is a picture of the app for the interface. A
         // failure to draw it must not take the run down with it.
@@ -283,6 +365,8 @@ export function createRunner(deps: RunnerDeps): Runner {
    * Run one mirror.
    */
   async function runMirror(
+    accountId: string,
+    account: AccountRuntime,
     config: MirrorConfig,
     manifest: Manifest,
     overrideGuard: boolean,
@@ -291,7 +375,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     const changed: Array<{ mirror: string; relPath: string; action: string }> = []
     const reports: Report[] = []
     const counts = noCounts()
-    const mirrorCard = card(config.name)
+    const mirrorCard = card(accountId, config.name)
 
     const mirrorManifest = manifest.mirrors[config.name] ?? emptyMirror(config.root)
 
@@ -301,6 +385,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       rootStat = statSync(config.root)
     } catch {
       skipMirror(
+        accountId,
         config.name,
         'missing-root',
         `the folder ${config.root} does not exist`,
@@ -327,13 +412,14 @@ export function createRunner(deps: RunnerDeps): Runner {
       //    letter or a swapped disk changes the serial.
       const recorded = manifest.volumes[driveLetter]
       if (checkVolumeFingerprint(recorded, { dev: driveDev ?? rootStat.dev })) {
-        skipMirror(
-          config.name,
-          'volume-changed',
-          `the drive ${driveLetter} is now a different volume, so the files on it are not the ones that were mirrored`,
-          true,
-          reports,
-        )
+      skipMirror(
+        accountId,
+        config.name,
+        'volume-changed',
+        `the drive ${driveLetter} is now a different volume, so the files on it are not the ones that were mirrored`,
+        true,
+        reports,
+      )
         return { counts, changed, reports, skipped: true }
       }
 
@@ -341,13 +427,14 @@ export function createRunner(deps: RunnerDeps): Runner {
       //    become a junction to another disk would otherwise look like
       //    every file was deleted.
       if (driveDev !== null && driveDev !== rootStat.dev) {
-        skipMirror(
-          config.name,
-          'volume-changed',
-          `the folder ${config.root} is on a different volume from the drive ${driveLetter}`,
-          true,
-          reports,
-        )
+      skipMirror(
+        accountId,
+        config.name,
+        'volume-changed',
+        `the folder ${config.root} is on a different volume from the drive ${driveLetter}`,
+        true,
+        reports,
+      )
         return { counts, changed, reports, skipped: true }
       }
     }
@@ -370,30 +457,32 @@ export function createRunner(deps: RunnerDeps): Runner {
       )
       if (hits.length > 0) {
         const where = hits.map((hit) => hit.dir || 'the root').join(', ')
-        skipMirror(
-          config.name,
-          'count-drop',
-          `the number of files fell by more than half in: ${where}`,
-          true,
-          reports,
-        )
+      skipMirror(
+        accountId,
+        config.name,
+        'count-drop',
+        `the number of files fell by more than half in: ${where}`,
+        true,
+        reports,
+      )
         return { counts, changed, reports, skipped: true }
       }
     }
 
     // --- Guard 4: resolve the Drive folder ---------------------------
-    phase.value = 'folders'
+    stateFor(accountId).phase = 'folders'
     // The destination is a path under My Drive. The stored id wins, so a
     // folder the user renamed in the Drive browser is honoured rather
     // than duplicated.
     const resolved = await resolveMirrorPath(
-      await deps.client(),
+      account.client,
       config.drivePath,
       MY_DRIVE_ID,
       mirrorManifest.driveFolderId,
     )
     if ('ambiguous' in resolved) {
       skipMirror(
+        accountId,
         config.name,
         'ambiguous-folder',
         `there is more than one folder called ${resolved.segment} on Drive, so the mirror was left alone`,
@@ -405,7 +494,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     const folderId = resolved.id
 
     // --- The Drive tree ----------------------------------------------
-    const nodes = await listTree(await deps.client(), folderId)
+    const nodes = await listTree(account.client, folderId)
     const drive: DriveTree = buildDriveTree(nodes)
 
     // The only ids this run may write under are the ones inside the
@@ -421,10 +510,10 @@ export function createRunner(deps: RunnerDeps): Runner {
 
     // A folder that exists on disk but not on Drive is created, parents
     // first, so an empty folder is mirrored as an empty folder.
-    await createMissingFolders(await deps.client(), config.root, local, mirrorManifest, folderId)
+    await createMissingFolders(account.client, config.root, local, mirrorManifest, folderId)
 
     // --- The plan ----------------------------------------------------
-    const io = buildIo(await deps.client(), config.root, drive)
+    const io = buildIo(account.client, config.root, drive)
     const exportPlan = planExportPaths(drive, mirrorManifest, local)
     buildClaimIndex(mirrorManifest, exportPlan, drive)
 
@@ -438,10 +527,10 @@ export function createRunner(deps: RunnerDeps): Runner {
     })
 
     // --- Run it ------------------------------------------------------
-    phase.value = 'uploads'
+    stateFor(accountId).phase = 'uploads'
     const result = await executePlan(plan, {
-      client: await deps.client(),
-      store: await deps.store(),
+      client: account.client,
+      store: account.store,
       manifest: mirrorManifest,
       root: config.root,
       onProgress: (event) => {
@@ -504,13 +593,14 @@ export function createRunner(deps: RunnerDeps): Runner {
   }
 
   function skipMirror(
+    accountId: string,
     name: string,
     reason: string,
     message: string,
     canOverride: boolean,
     reports: Report[],
   ): void {
-    const mirrorCard = card(name)
+    const mirrorCard = card(accountId, name)
     mirrorCard.status = 'skipped'
     // A skipped mirror is something the user has to know about. Without
     // this in the summary, a run that skipped half the mirrors reads as
@@ -533,10 +623,20 @@ export function createRunner(deps: RunnerDeps): Runner {
    * holds.
    */
   async function runSync(
+    accountId: string,
     mirrorName?: string,
     options?: { overrideGuard?: boolean },
   ): Promise<RunSummary> {
-    const locked = await acquireSyncLock(lockPath, new Date())
+    const account = await deps.account(accountId)
+    if (!account) {
+      const message = 'there is no account to sync'
+      note(deps.log, message)
+      const missing = emptySummary()
+      missing.errors = 1
+      missing.reports.push({ code: 'anomaly', relPath: '', message })
+      return missing
+    }
+    const locked = await takeLock(accountId)
     if (!locked) {
       const message = 'another sync was already running, so this run was skipped'
       note(deps.log, message)
@@ -544,20 +644,22 @@ export function createRunner(deps: RunnerDeps): Runner {
       // The run did nothing, but the user has to be told that. A summary
       // with no numbers reads as "everything is up to date", which is the
       // opposite of the truth.
+      skipped.skipped = true
       skipped.reports.push({ code: 'anomaly', relPath: '', message })
       return skipped
     }
 
     try {
       const startedAt = new Date().toISOString()
-      running.value = true
-      phase.value = 'starting'
-      emitState()
+      const state = stateFor(accountId)
+      state.running = true
+      state.phase = 'starting'
+      emitState(accountId)
 
       // The settings are read now, not when the app started: a folder the
       // user added a moment ago is mirrored by this run.
-      const settings = await deps.settings()
-      const store = await deps.store()
+      const settings = await account.settings()
+      const store = account.store
       const manifest = await store.read()
       const selected = mirrorName
         ? mirrorsToSync(settings).filter((config) => config.name === mirrorName)
@@ -604,6 +706,8 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       for (const config of selected) {
         const outcome = await runMirror(
+          accountId,
+          account,
           config,
           manifest,
           options?.overrideGuard ?? false,
@@ -632,22 +736,22 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
       // A manual "Sync now" is a run too. It resets the missed-slot
       // clock, so the app does not also do a catch-up run on top of it.
-      if (deps.saveSettings) {
-        const current = await deps.settings()
-        await deps.saveSettings({
+      if (deps.saveAccountSettings) {
+        const current = await account.settings()
+        await deps.saveAccountSettings(accountId, {
           schedule: { ...current.schedule, lastRunAt: summary.finishedAt },
         })
       }
 
-      lastRun.value = summary
+      stateFor(accountId).lastRun = summary
       deps.emit({ type: 'finished', summary })
       return summary
     } finally {
       // Whatever happened, the app is not syncing any more and the lock
       // is free again.
-      running.value = false
-      phase.value = 'idle'
-      emitState()
+      stateFor(accountId).running = false
+      stateFor(accountId).phase = 'idle'
+      emitState(accountId)
       try {
         await releaseSyncLock(lockPath)
       } catch (err) {
@@ -664,12 +768,14 @@ export function createRunner(deps: RunnerDeps): Runner {
   }
 
   const runner: Runner = {
-    async prime(): Promise<void> {
-      const settings = await deps.settings()
-      const store = await deps.store()
+    async prime(accountId: string): Promise<void> {
+      const account = await deps.account(accountId)
+      if (!account) return
+      const settings = await account.settings()
+      const store = account.store
       const manifest = await store.read()
       for (const config of configuredMirrors(settings)) {
-        const mirrorCard = card(config.name)
+        const mirrorCard = card(accountId, config.name)
         mirrorCard.localRoot = config.root
         mirrorCard.drivePath = `My Drive/${config.drivePath}`
         const mirrorManifest = manifest.mirrors[config.name]
@@ -681,16 +787,19 @@ export function createRunner(deps: RunnerDeps): Runner {
           // The folder is not there. A run will say so.
         }
       }
-      emitState()
+      emitState(accountId)
     },
 
-    async rebase(mirrorName: string): Promise<void> {
+    async rebase(accountId: string, mirrorName: string): Promise<void> {
+      const account = await deps.account(accountId)
+      if (!account) return
       // A re-approve must not interleave with a run. The run holds the
       // manifest in memory and would write it back over this change, so
       // the user's approval would be lost without a word. Wait for a run
       // in this process, and take the lock for the rest.
-      if (inFlight) {
-        await inFlight.catch(() => undefined)
+      const running = stateFor(accountId).inFlight
+      if (running) {
+        await running.catch(() => undefined)
       }
       const locked = await acquireSyncLock(lockPath, new Date())
       if (!locked) {
@@ -700,8 +809,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
 
       try {
-        const settings = await deps.settings()
-        const store = await deps.store()
+        const settings = await account.settings()
+        const store = account.store
         const manifest = await store.read()
         const config = settings.mirrors.find((m) => m.name === mirrorName)
         if (!config) return
@@ -747,17 +856,22 @@ export function createRunner(deps: RunnerDeps): Runner {
     },
 
     async moveMirrorDestination(
+      accountId: string,
       mirrorName: string,
       drivePath: string,
     ): Promise<{ ok: true } | { ok: false; message: string }> {
-      const settings = await deps.settings()
+      const account = await deps.account(accountId)
+      if (!account) {
+        return { ok: false, message: 'There is no account to do this for.' }
+      }
+      const settings = await account.settings()
       const config = settings.mirrors.find((m) => m.name === mirrorName)
       if (!config) {
         return { ok: false, message: `There is no mirror called ${mirrorName}.` }
       }
       if (config.drivePath === drivePath) return { ok: true }
 
-      const store = await deps.store()
+      const store = account.store
       const manifest = await store.read()
       const mirrorManifest = manifest.mirrors[mirrorName]
       const folderId = mirrorManifest?.driveFolderId
@@ -773,7 +887,7 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       let parentId = MY_DRIVE_ID
       if (parentPath) {
-        const resolved = await resolveMirrorPath(await deps.client(), parentPath, MY_DRIVE_ID)
+        const resolved = await resolveMirrorPath(account.client, parentPath, MY_DRIVE_ID)
         if ('ambiguous' in resolved) {
           return {
             ok: false,
@@ -786,7 +900,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
 
       try {
-        await (await deps.client()).moveFolder(folderId, parentId, newName)
+        account.client.moveFolder(folderId, parentId, newName)
       } catch (err) {
         return {
           ok: false,
@@ -806,9 +920,11 @@ export function createRunner(deps: RunnerDeps): Runner {
       return { ok: true }
     },
 
-    async pruneRemovedMirrors(): Promise<number> {
-      const settings = await deps.settings()
-      const store = await deps.store()
+    async pruneRemovedMirrors(accountId: string): Promise<number> {
+      const account = await deps.account(accountId)
+      if (!account) return 0
+      const settings = await account.settings()
+      const store = account.store
       const manifest = await store.read()
       const cutoff = Date.now() - THIRTY_DAYS_MS
       const forgotten: string[] = []
@@ -822,9 +938,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       if (forgotten.length === 0) return 0
       await store.checkpoint(manifest)
       // The configuration goes too, so the mirror is forgotten entirely.
-      if (deps.saveSettings) {
-        const current = await deps.settings()
-        await deps.saveSettings({
+      if (deps.saveAccountSettings) {
+        const current = await account.settings()
+        await deps.saveAccountSettings(accountId, {
           mirrors: current.mirrors.filter((m) => !forgotten.includes(m.name)),
         })
       }
@@ -832,16 +948,21 @@ export function createRunner(deps: RunnerDeps): Runner {
     },
 
     async downloadRestored(
+      accountId: string,
       mirrorName: string,
       driveFileId: string,
     ): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
-      const settings = await deps.settings()
+      const account = await deps.account(accountId)
+      if (!account) {
+        return { ok: false, message: 'There is no account to do this for.' }
+      }
+      const settings = await account.settings()
       const config = settings.mirrors.find((m) => m.name === mirrorName)
       if (!config) {
         return { ok: false, message: `There is no mirror called ${mirrorName}.` }
       }
 
-      const store = await deps.store()
+      const store = account.store
       const manifest = await store.read()
       const mirrorManifest = manifest.mirrors[mirrorName]
       const record = Object.values(mirrorManifest?.retired ?? {}).find(
@@ -862,7 +983,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       const relPath = record.localPath ?? record.path
       const dest = join(config.root, ...relPath.split('/'))
 
-      const node = await (await deps.client()).getFile(driveFileId)
+      const node = await account.client.getFile(driveFileId)
       if (!node) {
         return { ok: false, message: 'That file is not on Drive any more.' }
       }
@@ -875,9 +996,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       try {
         const native = exportInfoFor(record.driveMimeType)
         if (native) {
-          await (await deps.client()).exportTo(driveFileId, tempPath, native.exportMime)
+          account.client.exportTo(driveFileId, tempPath, native.exportMime)
         } else {
-          await (await deps.client()).downloadTo(driveFileId, tempPath)
+          account.client.downloadTo(driveFileId, tempPath)
         }
       } catch (err) {
         await rm(tempPath, { force: true })
@@ -940,22 +1061,26 @@ export function createRunner(deps: RunnerDeps): Runner {
       return { ok: true, path: relPath }
     },
 
-    async syncNow(mirrorName?: string, options?: { overrideGuard?: boolean }) {
+    async syncNow(accountId: string, mirrorName?: string, options?: { overrideGuard?: boolean }) {
+      const state = stateFor(accountId)
       // A run that is already going is the run. A second "Sync now"
       // joins it rather than starting a second one, because two runs
       // that read the manifest at the same time would both write it.
-      if (inFlight) return inFlight
-      inFlight = runSync(mirrorName, options).finally(() => {
-        inFlight = null
+      //
+      // Only this account's run is joined. Another account's run is a
+      // different world, and it must never hand back this one's results.
+      if (state.inFlight) return state.inFlight
+      state.inFlight = runSync(accountId, mirrorName, options).finally(() => {
+        state.inFlight = null
       })
-      return inFlight
+      return state.inFlight
     },
 
-    async state(): Promise<AppState> {
-      const settings = await deps.settings()
-      const store = await deps.store()
-      const manifest = await store.read()
-      return buildState(settings, manifest)
+    async state(accountId: string): Promise<AppState> {
+      const account = await deps.account(accountId)
+      const settings = account ? await account.settings() : defaultAccountSettings()
+      const manifest = account ? await account.store.read() : emptyManifest()
+      return buildState(accountId, account, settings, manifest)
     },
   }
 

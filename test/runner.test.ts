@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, readdir, readFile, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -18,6 +18,9 @@ import type { DriveNode, Manifest } from '../src/core/types'
 import type { DriveClient } from '../src/drive/client'
 import type { AppSettings } from '../src/main/settings'
 import type { AccountSettings } from '../src/main/accountSettings'
+
+/** The account the runner runs. */
+const ACC = 'acc_test'
 
 /** A mirror folder on the fake Drive. */
 const MIRROR_FOLDER_ID = 'FOLDER_MED'
@@ -37,9 +40,22 @@ interface Harness {
   appSettings: AppSettings
   /** Where copies of the manifest are kept. */
   backupPaths: string[]
+  /** The address of the account the app is showing. */
+  email: string
   manifestFile: string
   /** Where the runner's lock file lives. */
   lockPath: string
+  /**
+   * A second account, with a mirror of the same name, its own folder, its
+   * own Drive and its own manifest.
+   */
+  second: {
+    id: string
+    root: string
+    client: FakeDrive
+    store: ReturnType<typeof createManifestStore>
+    settings: AccountSettings
+  }
 }
 
 /** A sandbox with a mirror root and a Drive folder for it. */
@@ -71,12 +87,36 @@ async function harness(
     mirrors: [{ name: 'Medicine', root, drivePath: 'Medicine', enabled: true }],
   }
 
+  const secondRoot = join(dir, 'Second')
+  await mkdir(secondRoot, { recursive: true })
+  const secondClient = new FakeDrive()
+  secondClient.folders.set(MIRROR_FOLDER_ID, {
+    id: MIRROR_FOLDER_ID,
+    name: 'Medicine',
+    parentId: MY_DRIVE_ID,
+  })
+  const secondStore = createManifestStore(join(dir, 'second-state'))
+  const secondSettings: AccountSettings = {
+    ...defaultAccountSettings(),
+    // The same mirror name, in a different folder: two accounts, two
+    // mirrors, no shared state.
+    mirrors: [{ name: 'Medicine', root: secondRoot, drivePath: 'Medicine', enabled: true }],
+  }
+
   const appSettings: AppSettings = {
     ...defaultAppSettings(),
     accounts: [
       {
         id: 'acc_test',
         email: 'user@example.com',
+        addedAt: '2026-10-22T00:00:00.000Z',
+        signedIn: true,
+        mirrorCount: 1,
+        hasNotice: false,
+      },
+      {
+        id: 'acc_second',
+        email: 'second@example.com',
         addedAt: '2026-10-22T00:00:00.000Z',
         signedIn: true,
         mirrorCount: 1,
@@ -96,6 +136,14 @@ async function harness(
     settings,
     appSettings,
     backupPaths: [join(dir, 'backup')],
+    email: 'user@example.com',
+    second: {
+      id: 'acc_second',
+      root: secondRoot,
+      client: secondClient,
+      store: secondStore,
+      settings: secondSettings,
+    },
     manifestFile,
     lockPath: join(dir, 'sync.lock'),
   }
@@ -110,27 +158,54 @@ function runner(
     email?: string
     appSettings?: () => Promise<AppSettings>
     settings?: () => Promise<AccountSettings>
+    /** How long to keep trying for the lock. */
+    lockWait?: { attempts: number; intervalMs: number }
+    /** Waiting, in a way the test can stand in for. */
+    sleep?: (ms: number) => Promise<void>
   } = {},
 ) {
   const appSettings = async (): Promise<AppSettings> => {
     const base = options.appSettings ? await options.appSettings() : box.appSettings
-    if (!options.email) return base
     return {
       ...base,
-      accounts: base.accounts.map((account) => ({ ...account, email: options.email! })),
+      accounts: base.accounts.map((account) => ({ ...account, email: box.email })),
     }
   }
+  if (options.email) box.email = options.email
   return createRunner({
-    client: async () => options.client ?? box.client,
-    store: async () => box.store,
-    settings: options.settings ?? (async () => box.settings),
+    // The account the run is for, and everything it needs.
+    account: async (id) => {
+      if (id === box.second.id) {
+        return {
+          id: box.second.id,
+          email: box.email,
+          signedIn: true,
+          client: box.second.client,
+          store: box.second.store,
+          settings: async () => box.second.settings,
+        }
+      }
+      return {
+        id,
+        email: box.email,
+        signedIn: true,
+        client: options.client ?? box.client,
+        store: box.store,
+        settings: options.settings ?? (async () => box.settings),
+      }
+    },
     appSettings,
     // The backup copy stays inside the test's own directory.
     backupPaths: async () => box.backupPaths,
+    saveAccountSettings: async (_id, patch) => {
+      Object.assign(box.settings, patch)
+      return box.settings
+    },
     emit: (event) => box.events.push(event),
     log: (message) => box.logs.push(message),
     lockPath: box.lockPath,
-    hasCredentials: () => true,
+    lockWait: options.lockWait,
+    sleep: options.sleep,
   })
 }
 
@@ -158,7 +233,7 @@ describe('the sync runner', () => {
     const box = await harness()
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box).syncNow(ACC)
 
     expect(summary.uploaded).toBe(1)
     expect(summary.errors).toBe(0)
@@ -197,7 +272,7 @@ describe('the sync runner', () => {
     }
     await store.write(manifest)
 
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box).syncNow(ACC)
 
     expect(summary.trashed).toBe(1)
     const trashed = box.client.calls.find((c) => c.op === 'trash')
@@ -211,7 +286,7 @@ describe('the sync runner', () => {
     const box = await harness()
     box.settings.mirrors[0]!.root = join(box.dir, 'not-there')
 
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box).syncNow(ACC)
 
     expect(summary.errors).toBe(0)
     const guard = box.events.find((e) => e.type === 'guard')
@@ -235,7 +310,7 @@ describe('the sync runner', () => {
     }
     await store.write(manifest)
 
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box).syncNow(ACC)
 
     expect(summary.uploaded).toBe(0)
     const guard = box.events.find((e) => e.type === 'guard')
@@ -252,7 +327,7 @@ describe('the sync runner', () => {
     const box = await harness()
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
-    await runner(box).syncNow()
+    await runner(box).syncNow(ACC)
 
     const finished = box.events.find((e) => e.type === 'finished')
     expect(finished).toBeDefined()
@@ -270,11 +345,11 @@ describe('the sync runner', () => {
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
     // First run: the file is uploaded.
-    await runner(box).syncNow()
+    await runner(box).syncNow(ACC)
     box.events.length = 0
 
     // Second run: nothing to do.
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box).syncNow(ACC)
 
     expect(summary.uploaded).toBe(0)
     expect(summary.downloaded).toBe(0)
@@ -304,7 +379,7 @@ describe('the sync runner', () => {
     }
     await store.write(manifest)
 
-    await runner(box).syncNow()
+    await runner(box).syncNow(ACC)
 
     const after = await store.read()
     expect(after.mirrors['Medicine']?.lastCounts).toEqual({ '': 43, renders: 12 })
@@ -328,7 +403,7 @@ describe('the sync runner', () => {
     await store.write(manifest)
 
     // Without the override the guard trips.
-    const skipped = await runner(box).syncNow()
+    const skipped = await runner(box).syncNow(ACC)
     expect(skipped.uploaded).toBe(0)
     const guard = box.events.find((e) => e.type === 'guard')
     expect(guard).toBeDefined()
@@ -338,7 +413,7 @@ describe('the sync runner', () => {
     }
 
     // With the override the mirror runs, and the baseline is updated.
-    const overridden = await runner(box).syncNow('Medicine', { overrideGuard: true })
+    const overridden = await runner(box).syncNow(ACC, 'Medicine', { overrideGuard: true })
     expect(overridden.uploaded).toBe(1)
 
     const after = await store.read()
@@ -350,7 +425,7 @@ describe('the sync runner', () => {
     await mkdir(join(box.root, 'sub'), { recursive: true })
     await writeFile(join(box.root, 'sub', 'a.psd'), 'local bytes')
 
-    await runner(box).syncNow()
+    await runner(box).syncNow(ACC)
 
     const writes = box.client.calls.filter(
       (c) => c.op === 'createFile' || c.op === 'createFolder',
@@ -371,7 +446,7 @@ describe('the sync runner', () => {
     const box = await harness({ withFolder: false })
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
-    await runner(box).syncNow()
+    await runner(box).syncNow(ACC)
 
     const created = box.client.calls.find((c) => c.op === 'createFolder')
     expect(created?.name).toBe('Medicine')
@@ -384,9 +459,9 @@ describe('the sync runner', () => {
     await writeFile(join(box.root, 'b.psd'), 'local bytes')
 
     const app = runner(box)
-    await app.prime()
+    await app.prime(ACC)
 
-    const state = await app.state()
+    const state = await app.state(ACC)
     const card = state.mirrors.find((m) => m.name === 'Medicine')
     expect(card?.fileCount).toBe(2)
     // Nothing was written to Drive.
@@ -397,7 +472,7 @@ describe('the sync runner', () => {
     const box = await harness()
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
-    await runner(box).syncNow()
+    await runner(box).syncNow(ACC)
 
     // Each account's copy lives in a folder of its own.
     const written = await readdir(join(box.dir, 'backup'))
@@ -417,7 +492,7 @@ describe('the sync runner', () => {
     await writeFile(join(box.dir, 'blocker'), 'not a folder')
     box.backupPaths = [join(box.dir, 'blocker', 'backup')]
 
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box).syncNow(ACC)
 
     // The mirror did its work.
     expect(summary.uploaded).toBe(1)
@@ -433,7 +508,7 @@ describe('the sync runner', () => {
     await writeFile(join(box.dir, 'blocker'), 'not a folder')
     box.backupPaths = [join(box.dir, 'blocker', 'backup')]
 
-    await expect(runner(box).rebase('Medicine')).resolves.toBeUndefined()
+    await expect(runner(box).rebase(ACC, 'Medicine')).resolves.toBeUndefined()
 
     expect(box.logs).toHaveLength(1)
   })
@@ -444,7 +519,7 @@ describe('the sync runner', () => {
     const second = join(box.dir, 'other-disk')
     box.backupPaths = [join(box.dir, 'backup'), second]
 
-    await runner(box).syncNow()
+    await runner(box).syncNow(ACC)
 
     expect(await readdir(join(box.dir, 'backup'))).toContain('user@example.com')
     expect(await readdir(second)).toContain('user@example.com')
@@ -454,7 +529,7 @@ describe('the sync runner', () => {
     const box = await harness()
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
-    await runner(box).syncNow()
+    await runner(box).syncNow(ACC)
 
     // The backup is a copy of the manifest the app just wrote, byte for
     // byte: a hand-diff of the two shows no differences.
@@ -471,7 +546,7 @@ describe('the sync runner', () => {
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
     const app = runner(box)
-    const [a, b] = await Promise.all([app.syncNow(), app.syncNow()])
+    const [a, b] = await Promise.all([app.syncNow(ACC), app.syncNow(ACC)])
 
     expect(a.uploaded).toBe(1)
     expect(b.uploaded).toBe(1)
@@ -486,14 +561,14 @@ describe('the sync runner', () => {
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
     const app = runner(box, { client: new BrokenDrive() })
-    await expect(app.syncNow()).rejects.toThrow('boom')
+    await expect(app.syncNow(ACC)).rejects.toThrow('boom')
 
-    const state = await app.state()
+    const state = await app.state(ACC)
     expect(state.running).toBe(false)
     expect(state.phase).toBe('idle')
 
     // And the next run is not blocked by the failed one.
-    const second = await app.syncNow()
+    const second = await app.syncNow(ACC)
     expect(second.uploaded).toBe(1)
   })
 
@@ -513,7 +588,7 @@ describe('the sync runner', () => {
       enabled: true,
     })
 
-    const summary = await app.syncNow()
+    const summary = await app.syncNow(ACC)
 
     expect(summary.mirrors.map((m) => m.name)).toEqual(['Medicine', 'Photos'])
     expect(summary.uploaded).toBe(2)
@@ -531,7 +606,7 @@ describe('the sync runner', () => {
       enabled: true,
     })
 
-    const state = await app.state()
+    const state = await app.state(ACC)
 
     expect(state.mirrors.map((m) => m.name)).toEqual(['Medicine', 'Photos'])
     expect(state.mirrors[1]?.localRoot).toBe(photos)
@@ -542,7 +617,7 @@ describe('the sync runner', () => {
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
     box.settings.mirrors[0]!.enabled = false
 
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box).syncNow(ACC)
 
     expect(summary.uploaded).toBe(0)
     expect(summary.mirrors).toEqual([])
@@ -553,7 +628,7 @@ describe('the sync runner', () => {
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
     box.settings.mirrors[0]!.removedAt = new Date().toISOString()
 
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box).syncNow(ACC)
 
     expect(summary.uploaded).toBe(0)
     expect(summary.mirrors).toEqual([])
@@ -572,7 +647,7 @@ describe('the sync runner', () => {
     // no drive letter, so there is no volume to check.
     box.settings.mirrors[0]!.root = '\\\\?\\' + box.root
 
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box).syncNow(ACC)
 
     expect(summary.uploaded).toBe(1)
     const after = await box.store.read()
@@ -606,18 +681,38 @@ describe('the sync runner', () => {
     // Another process is syncing right now.
     await writeFile(box.lockPath, 'held')
 
-    const summary = await runner(box).syncNow()
+    const summary = await runner(box, { lockWait: { attempts: 2, intervalMs: 1 } }).syncNow(ACC)
 
     expect(summary.uploaded).toBe(0)
+    expect(summary.skipped).toBe(true)
     expect(box.client.calls.some((c) => c.op === 'createFile')).toBe(false)
     expect(box.logs.join('\n')).toContain('another sync was already running')
+  })
+
+  it('waits for the lock and runs when it is free', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'local bytes')
+    // Another process is syncing right now.
+    await writeFile(box.lockPath, 'held')
+
+    // The other process lets go while this run is waiting for it.
+    const r = runner(box, {
+      lockWait: { attempts: 5, intervalMs: 1 },
+      sleep: async () => {
+        await rm(box.lockPath, { force: true })
+      },
+    })
+    const summary = await r.syncNow(ACC)
+
+    expect(summary.skipped).toBeUndefined()
+    expect(summary.uploaded).toBe(1)
   })
 
   it('takes the lock for the run and gives it back afterwards', async () => {
     const box = await harness()
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
 
-    await runner(box).syncNow()
+    await runner(box).syncNow(ACC)
 
     expect(existsSync(box.lockPath)).toBe(false)
   })
@@ -626,7 +721,7 @@ describe('the sync runner', () => {
     const box = await harness()
 
     const app = runner(box, { client: new BrokenDrive() })
-    await expect(app.syncNow()).rejects.toThrow('boom')
+    await expect(app.syncNow(ACC)).rejects.toThrow('boom')
 
     expect(existsSync(box.lockPath)).toBe(false)
   })
@@ -662,18 +757,21 @@ describe('the lock between runs', () => {
     const box = await harness()
     const r = runner(box)
     await acquireSyncLock(box.lockPath, new Date())
-    await expect(r.rebase('Medicine')).rejects.toThrow(/another sync is running/i)
+    await expect(r.rebase(ACC, 'Medicine')).rejects.toThrow(/another sync is running/i)
     const manifest = await box.store.read()
     expect(manifest.mirrors.Medicine).toBeUndefined()
   })
 
   it('says why a run was skipped when another sync holds the lock', async () => {
     const box = await harness()
-    const r = runner(box)
+    const r = runner(box, { lockWait: { attempts: 2, intervalMs: 1 } })
     await acquireSyncLock(box.lockPath, new Date())
-    const summary = await r.syncNow()
+    const summary = await r.syncNow(ACC)
     expect(summary.reports.length).toBeGreaterThan(0)
     expect(summary.reports[0]!.message).toMatch(/another sync/i)
+    // A run that did not happen is not recorded as having happened, so the
+    // slot is caught up rather than lost.
+    expect(summary.skipped).toBe(true)
   })
 })
 
@@ -685,7 +783,7 @@ describe('the manifest and the account that owns it', () => {
     await box.store.write(manifest)
     const r = runner(box, { email: 'me@example.com' })
 
-    const summary = await r.syncNow()
+    const summary = await r.syncNow(ACC)
 
     expect(summary.errors).toBe(1)
     expect(summary.reports[0]?.message).toContain('someone-else@example.com')
@@ -697,9 +795,76 @@ describe('the manifest and the account that owns it', () => {
     const box = await harness()
     const r = runner(box, { email: 'me@example.com' })
 
-    await r.syncNow()
+    await r.syncNow(ACC)
 
     expect((await box.store.read()).accountEmail).toBe('me@example.com')
+  })
+
+  it('keeps two accounts apart when they hold a mirror with the same name', async () => {
+    const box = await harness()
+    // Two files in the first account's folder, one in the second's.
+    await writeFile(join(box.root, 'a.psd'), 'one')
+    await writeFile(join(box.root, 'b.psd'), 'two')
+    await writeFile(join(box.second.root, 'a.psd'), 'one')
+
+    const r = runner(box)
+    await r.syncNow(ACC)
+    await r.syncNow(box.second.id)
+
+    const a = await r.state(ACC)
+    const b = await r.state(box.second.id)
+    expect(a.mirrors[0]?.name).toBe('Medicine')
+    expect(b.mirrors[0]?.name).toBe('Medicine')
+    // Each card counts its own account's files.
+    expect(a.mirrors[0]?.fileCount).toBe(2)
+    expect(b.mirrors[0]?.fileCount).toBe(1)
+  })
+
+  it('trashes a deleted local file in both Drives, and keeps the manifests apart', async () => {
+    const box = await harness()
+    // Enough files that deleting one is not a mass deletion, so the
+    // count-drop guard does not step in.
+    for (const name of ['a.psd', 'b.psd', 'c.psd']) {
+      await writeFile(join(box.root, name), 'one')
+      await writeFile(join(box.second.root, name), 'one')
+    }
+
+    const r = runner(box)
+    await r.syncNow(ACC)
+    await r.syncNow(box.second.id)
+    // The file is gone from both accounts' folders.
+    await rm(join(box.root, 'a.psd'))
+    await rm(join(box.second.root, 'a.psd'))
+
+    await r.syncNow(ACC)
+    await r.syncNow(box.second.id)
+
+    // The file goes to the Drive trash of each account, and each account's
+    // manifest forgets its own copy and nobody else's.
+    expect(box.client.calls.some((c) => c.op === 'trash')).toBe(true)
+    expect(box.second.client.calls.some((c) => c.op === 'trash')).toBe(true)
+    expect((await box.store.read()).mirrors.Medicine?.files['a.psd']).toBeUndefined()
+    expect((await box.second.store.read()).mirrors.Medicine?.files['a.psd']).toBeUndefined()
+    // The files that are still there are still in both manifests.
+    expect((await box.store.read()).mirrors.Medicine?.files['b.psd']).toBeDefined()
+    expect((await box.second.store.read()).mirrors.Medicine?.files['b.psd']).toBeDefined()
+  })
+
+  it('gives the caller its own summary when another account is running', async () => {
+    const box = await harness()
+    await writeFile(join(box.root, 'a.psd'), 'one')
+
+    // The second account's run waits for the lock the first one holds,
+    // and then runs for itself.
+    const r = runner(box, { lockWait: { attempts: 200, intervalMs: 5 } })
+    const first = r.syncNow(ACC)
+    const second = await r.syncNow(box.second.id)
+    const firstSummary = await first
+
+    // The two accounts are different worlds, and one account's run never
+    // hands back the other's results.
+    expect(second).not.toBe(firstSummary)
+    expect(second.mirrors.map((m) => m.name)).toEqual(['Medicine'])
   })
 
   it('treats an account that is not a string as no account', async () => {
@@ -709,7 +874,7 @@ describe('the manifest and the account that owns it', () => {
     await box.store.write(manifest)
     const r = runner(box, { email: 'me@example.com' })
 
-    const summary = await r.syncNow()
+    const summary = await r.syncNow(ACC)
 
     expect(summary.errors).toBe(0)
   })
@@ -759,7 +924,7 @@ describe('forgetting a mirror the user removed', () => {
     }
     const r = runner(box, { settings: async () => settings })
 
-    expect(await r.pruneRemovedMirrors()).toBe(1)
+    expect(await r.pruneRemovedMirrors(ACC)).toBe(1)
 
     const after = await box.store.read()
     expect(after.mirrors.Old).toBeUndefined()
@@ -780,7 +945,7 @@ describe('forgetting a mirror the user removed', () => {
     await box.store.write(manifest)
     const r = runner(box)
 
-    expect(await r.pruneRemovedMirrors()).toBe(0)
+    expect(await r.pruneRemovedMirrors(ACC)).toBe(0)
     expect((await box.store.read()).mirrors.Kept).toBeDefined()
   })
 })
@@ -801,7 +966,7 @@ describe('changing where a mirror lives on Drive', () => {
     await box.store.write(manifest)
     const r = runner(box)
 
-    const result = await r.moveMirrorDestination('Medicine', 'Archive/Photos')
+    const result = await r.moveMirrorDestination(ACC, 'Medicine', 'Archive/Photos')
 
     expect(result.ok).toBe(true)
     const moved = box.client.calls.find((c) => c.op === 'moveFolder')
@@ -812,7 +977,7 @@ describe('changing where a mirror lives on Drive', () => {
   it('says so when there is no such mirror', async () => {
     const box = await harness()
     const r = runner(box)
-    const result = await r.moveMirrorDestination('Nope', 'Photos')
+    const result = await r.moveMirrorDestination(ACC, 'Nope', 'Photos')
     expect(result.ok).toBe(false)
   })
 })
@@ -847,7 +1012,7 @@ describe('bringing a restored file back', () => {
     await withRestored(box)
     const r = runner(box)
 
-    const result = await r.downloadRestored('Medicine', 'D1')
+    const result = await r.downloadRestored(ACC, 'Medicine', 'D1')
 
     expect(result.ok).toBe(true)
     expect(await readFile(join(box.root, 'a.txt'), 'utf8')).toBe('hello')
@@ -859,7 +1024,7 @@ describe('bringing a restored file back', () => {
     await writeFile(join(box.root, 'a.txt'), 'something else', 'utf8')
     const r = runner(box)
 
-    const result = await r.downloadRestored('Medicine', 'D1')
+    const result = await r.downloadRestored(ACC, 'Medicine', 'D1')
 
     expect(result.ok).toBe(false)
     expect(await readFile(join(box.root, 'a.txt'), 'utf8')).toBe('something else')
@@ -874,7 +1039,7 @@ describe('bringing a restored file back', () => {
     await box.store.write(manifest)
     const r = runner(box)
 
-    const result = await r.downloadRestored('Medicine', 'D1')
+    const result = await r.downloadRestored(ACC, 'Medicine', 'D1')
 
     expect(result.ok).toBe(false)
   })

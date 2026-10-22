@@ -56,7 +56,7 @@ const PRELOAD_CHANNELS = [
 function stubDeps(): IpcDeps {
   return {
     runner: {
-      syncNow: async () => ({
+      syncNow: async (_accountId: string, _mirrorName?: string) => ({
         startedAt: '',
         finishedAt: '',
         uploaded: 0,
@@ -68,7 +68,7 @@ function stubDeps(): IpcDeps {
         changed: [],
         reports: [],
       }),
-      state: async () => ({
+      state: async (_accountId: string) => ({
         mirrors: [],
         running: false,
         phase: 'idle',
@@ -76,16 +76,25 @@ function stubDeps(): IpcDeps {
         accountEmail: null,
         needsAuth: false,
       }),
-      prime: async () => undefined,
-      rebase: async () => undefined,
-      moveMirrorDestination: async () => ({ ok: true }),
-      pruneRemovedMirrors: async () => 0,
-      downloadRestored: async () => ({ ok: true, path: 'a.txt' }),
+      prime: async (_accountId: string) => undefined,
+      rebase: async (_accountId: string, _mirrorName: string) => undefined,
+      moveMirrorDestination: async (
+        _accountId: string,
+        _mirrorName: string,
+        _drivePath: string,
+      ) => ({ ok: true }),
+      pruneRemovedMirrors: async (_accountId: string) => 0,
+      downloadRestored: async (
+        _accountId: string,
+        _mirrorName: string,
+        _driveFileId: string,
+      ) => ({ ok: true, path: 'a.txt' }),
     },
     getSettings: async () => defaultAppSettings(),
     saveSettings: async () => defaultAppSettings(),
-    getAccountSettings: async () => defaultAccountSettings(),
-    saveAccountSettings: async () => defaultAccountSettings(),
+    getAccountSettings: async (_accountId: string) => defaultAccountSettings(),
+    saveAccountSettings: async (_accountId: string, _patch: unknown) => defaultAccountSettings(),
+    currentAccountId: async () => 'acc_test',
     setCredentials: async () => ({ ok: true }),
     authenticate: async () => ({ ok: true }),
     signOut: async () => undefined,
