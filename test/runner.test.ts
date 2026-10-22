@@ -1054,6 +1054,24 @@ describe('bringing a restored file back', () => {
     expect(await readFile(join(box.root, 'a.txt'), 'utf8')).toBe('hello')
   })
 
+  it('waits for the download before it hashes and copies the file', async () => {
+    const box = await harness()
+    await withRestored(box)
+    // A slow download is every download: the bytes arrive after the call
+    // returns. The copy must wait for them.
+    const client = box.client
+    const original = client.downloadTo.bind(client)
+    client.downloadTo = async (fileId: string, destPath: string): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      await original(fileId, destPath)
+    }
+
+    const result = await runner(box, { client }).downloadRestored(ACC, 'Medicine', 'D1')
+
+    expect(result.ok).toBe(true)
+    expect(await readFile(join(box.root, 'a.txt'), 'utf8')).toBe('hello')
+  })
+
   it('refuses to replace a different file that is already there', async () => {
     const box = await harness()
     await withRestored(box)

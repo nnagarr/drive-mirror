@@ -1012,9 +1012,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       try {
         const native = exportInfoFor(record.driveMimeType)
         if (native) {
-          account.client.exportTo(driveFileId, tempPath, native.exportMime)
+          await account.client.exportTo(driveFileId, tempPath, native.exportMime)
         } else {
-          account.client.downloadTo(driveFileId, tempPath)
+          await account.client.downloadTo(driveFileId, tempPath)
         }
       } catch (err) {
         await rm(tempPath, { force: true })
