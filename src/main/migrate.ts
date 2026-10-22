@@ -57,6 +57,8 @@ export async function migrateToAccounts(deps: {
   root: string
   /** Write the new app-wide settings file. */
   writeAppSettings: (settings: AppSettings) => Promise<void>
+  /** Read the app-wide settings file, to clear a list that names a gone account. */
+  readAppSettings?: () => Promise<AppSettings>
   /** Remove the old Windows task, if it is registered. */
   unregisterLegacyTask?: () => Promise<void>
   log?: (message: string) => void
@@ -159,18 +161,37 @@ export async function migrateToAccounts(deps: {
     }
     await deps.writeAppSettings(app)
 
-    // 9. Only now are the old files moved aside. The legacy settings file
-    //    is already in the legacy folder.
+    // 9. The marker, and it comes before anything is moved aside.
+    //
+    //    From here on the new layout is complete and verified, so the
+    //    migration is done. A failure in the cleanup below cannot undo it,
+    //    and the account folder is never deleted again - which is what
+    //    makes the migration resumable. Before this point the legacy
+    //    files are still where they were, so a failure leaves them
+    //    untouched and the next start starts again from the same place.
+    await writeAtomic(marker, `${new Date().toISOString()}\n`)
+
+    // 10. The old files are moved aside. This is tidying up: the app
+    //     reads the account's copy from now on, and the old files are
+    //     kept either way. A failure here must not undo the migration.
     await moveIfPresent(legacyManifest, join(legacyDir(root), 'manifest.json'))
     await moveIfPresent(join(root, 'journal.ndjson'), join(legacyDir(root), 'journal.ndjson'))
     await moveIfPresent(join(root, 'tokens.json'), join(legacyDir(root), 'tokens.json'))
 
-    // 10. The old Windows task fired a run with no account in it, which
-    //     would now run every account at once. It goes.
-    if (deps.unregisterLegacyTask) await deps.unregisterLegacyTask()
-
-    // 11. The marker, last of all.
-    await writeAtomic(marker, `${new Date().toISOString()}\n`)
+    // 11. The old Windows task fired a run with no account in it, which
+    //     would now run every account at once. It goes - but if it cannot
+    //     be removed, the migration has still succeeded.
+    if (deps.unregisterLegacyTask) {
+      try {
+        await deps.unregisterLegacyTask()
+      } catch (err) {
+        deps.log?.(
+          `the old Windows task could not be removed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        )
+      }
+    }
 
     deps.log?.(
       `the install was moved into the account layout: ${dir} holds the account, ` +
@@ -182,6 +203,18 @@ export async function migrateToAccounts(deps: {
     // folder goes, everything else stays where it was, and the migration
     // runs again at the next start.
     await rm(dir, { recursive: true, force: true }).catch(() => undefined)
+    // The app's settings may already name the account whose folder has
+    // just been removed, so the list is cleared: the app must not offer an
+    // account it has no files for.
+    try {
+      const app = await deps.readAppSettings?.()
+      if (app) {
+        await deps.writeAppSettings({ ...app, accounts: [], currentAccountId: null })
+      }
+    } catch {
+      // The settings could not be read or written. The next start will
+      // try the migration again.
+    }
     const error = err instanceof Error ? err.message : String(err)
     deps.log?.(`the install could not be moved into the account layout: ${error}`)
     return { migrated: false, error }

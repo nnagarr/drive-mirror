@@ -186,6 +186,27 @@ describe('the migration to accounts', () => {
     expect(second.migrated).toBe(false)
   })
 
+  it('keeps the account when the old task cannot be removed', async () => {
+    await seedLegacy()
+    const result = await migrateToAccounts({
+      root: ROOT,
+      writeAppSettings: writeApp,
+      unregisterLegacyTask: async () => {
+        throw new Error('Access is denied')
+      },
+    })
+    // The migration has succeeded: the new layout is complete and
+    // verified, and a tidying-up failure must not undo it.
+    expect(result.migrated).toBe(true)
+    const id = (await listIds())[0]!
+    const manifest = JSON.parse(await readFile(accountManifestPath(ROOT, id), 'utf8'))
+    expect(manifest.accountEmail).toBe('you@example.com')
+    // And it does not run again, so the account is never taken away.
+    const second = await migrateToAccounts({ root: ROOT, writeAppSettings: writeApp })
+    expect(second.migrated).toBe(false)
+    expect(existsSync(accountManifestPath(ROOT, id))).toBe(true)
+  })
+
   it('removes the legacy Windows task', async () => {
     await seedLegacy()
     let removed = false

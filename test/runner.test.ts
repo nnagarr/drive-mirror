@@ -168,17 +168,20 @@ function runner(
     const base = options.appSettings ? await options.appSettings() : box.appSettings
     return {
       ...base,
-      accounts: base.accounts.map((account) => ({ ...account, email: box.email })),
+      accounts: base.accounts.map((account) =>
+        account.id === box.second.id
+          ? account
+          : { ...account, email: options.email ?? box.email },
+      ),
     }
   }
-  if (options.email) box.email = options.email
   return createRunner({
     // The account the run is for, and everything it needs.
     account: async (id) => {
       if (id === box.second.id) {
         return {
           id: box.second.id,
-          email: box.email,
+          email: 'second@example.com',
           signedIn: true,
           client: box.second.client,
           store: box.second.store,
@@ -187,7 +190,7 @@ function runner(
       }
       return {
         id,
-        email: box.email,
+        email: options.email ?? box.email,
         signedIn: true,
         client: options.client ?? box.client,
         store: box.store,
@@ -818,6 +821,27 @@ describe('the manifest and the account that owns it', () => {
     // Each card counts its own account's files.
     expect(a.mirrors[0]?.fileCount).toBe(2)
     expect(b.mirrors[0]?.fileCount).toBe(1)
+    // Each manifest belongs to the account it was made for, not to the
+    // account that happened to be on screen.
+    expect((await box.store.read()).accountEmail).toBe('user@example.com')
+    expect((await box.second.store.read()).accountEmail).toBe('second@example.com')
+    // And each manifest's backup copy lands in its own folder.
+    expect(existsSync(join(box.dir, 'backup', 'user@example.com', 'manifest.json'))).toBe(true)
+    expect(existsSync(join(box.dir, 'backup', 'second@example.com', 'manifest.json'))).toBe(true)
+  })
+
+  it('gives the running account its own manifest, whatever is on screen', async () => {
+    const box = await harness()
+    await writeFile(join(box.second.root, 'a.psd'), 'one')
+
+    const r = runner(box)
+    // The first account is on screen, and the second one is the one that
+    // runs.
+    await r.syncNow(box.second.id)
+
+    expect((await box.second.store.read()).accountEmail).toBe('second@example.com')
+    // The account on screen is untouched by the other account's run.
+    expect((await box.store.read()).accountEmail).toBeNull()
   })
 
   it('trashes a deleted local file in both Drives, and keeps the manifests apart', async () => {

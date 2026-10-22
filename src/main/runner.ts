@@ -686,10 +686,11 @@ export function createRunner(deps: RunnerDeps): Runner {
       // cannot use it at all. The run is blocked rather than quietly
       // producing a broken mirror.
       //
-      // The address is the one the app already knows - the account the
-      // manifest is filed under - so the check needs no call to Drive and
-      // no network failure can turn it off.
-      const signedIn = currentAccountEmail(await deps.appSettings())
+      // The address is the running account's own - the account the
+      // manifest is filed under - so the check needs no call to Drive, no
+      // network failure can turn it off, and the account on screen cannot
+      // change the answer half way through a run.
+      const signedIn = account.email
       const owner =
         typeof manifest.accountEmail === 'string' ? manifest.accountEmail : null
       if (signedIn && owner && owner !== signedIn) {
@@ -728,7 +729,7 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       summary.finishedAt = new Date().toISOString()
       await store.checkpoint(manifest)
-      const backups = await writeBackups(await deps.backupPaths(), manifest, currentAccountEmail(await deps.appSettings()) ?? '', deps.log)
+      const backups = await writeBackups(await deps.backupPaths(), manifest, account.email, deps.log)
       for (const path of backups.failed) {
         // The sync itself is fine, but the safety net is not being
         // refreshed, and the user has to know that.
@@ -842,7 +843,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         }
 
         await store.checkpoint(manifest)
-        await writeBackups(await deps.backupPaths(), manifest, currentAccountEmail(await deps.appSettings()) ?? '', deps.log)
+        await writeBackups(await deps.backupPaths(), manifest, account.email, deps.log)
       } finally {
         try {
           await releaseSyncLock(lockPath)
@@ -1091,18 +1092,6 @@ export function createRunner(deps: RunnerDeps): Runner {
   return runner
 }
 
-/**
- * The address of the account the app is showing.
- *
- * The app already knows it - it is the account the manifest is filed under
- * - so the guard and the backup folders need no call to Drive, and no
- * network failure can turn the guard off.
- */
-function currentAccountEmail(app: AppSettings): string | null {
-  if (!app.currentAccountId) return null
-  const found = app.accounts.find((account) => account.id === app.currentAccountId)
-  return found ? found.email : null
-}
 
 /**
  * The mirrors the app is configured with.

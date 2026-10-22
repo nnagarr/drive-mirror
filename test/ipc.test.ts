@@ -93,7 +93,20 @@ function stubDeps(): IpcDeps {
         _driveFileId: string,
       ) => ({ ok: true, path: 'a.txt' }),
     },
-    getSettings: async () => defaultAppSettings(),
+    getSettings: async () => ({
+      ...defaultAppSettings(),
+      accounts: [
+        {
+          id: 'acc_test',
+          email: 'user@example.com',
+          addedAt: '2026-10-22T00:00:00.000Z',
+          signedIn: true,
+          mirrorCount: 1,
+          hasNotice: false,
+        },
+      ],
+      currentAccountId: 'acc_test',
+    }),
     saveSettings: async () => defaultAppSettings(),
     getAccountSettings: async (_accountId: string) => defaultAccountSettings(),
     saveAccountSettings: async (_accountId: string, _patch: unknown) => defaultAccountSettings(),
@@ -138,8 +151,22 @@ describe('the IPC surface', () => {
       }
     }
     registerIpc(deps)
-    await handlers.get('drive-mirror:get-state')!(null, 'acc_7f3a2b')
-    expect(seen).toEqual(['acc_7f3a2b'])
+    await handlers.get('drive-mirror:get-state')!(null, 'acc_test')
+    expect(seen).toEqual(['acc_test'])
+  })
+
+  it('refuses an account-scoped call that names no account', async () => {
+    const deps = stubDeps()
+    deps.currentAccountId = async () => null
+    registerIpc(deps)
+    const result = await handlers.get('drive-mirror:remove-mirror')!(null, undefined, 'Medicine')
+    expect(result).toEqual({ ok: false, message: 'no account is selected' })
+  })
+
+  it('refuses an account-scoped call that names an account it does not know', async () => {
+    registerIpc(stubDeps())
+    const forgotten = await handlers.get('drive-mirror:forget-account')!(null, 'acc_missing')
+    expect(forgotten).toEqual({ ok: false, message: 'no account is selected' })
   })
 
   it('registers no channel twice', () => {
