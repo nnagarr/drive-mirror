@@ -96,6 +96,10 @@ export interface IpcDeps {
   ): Promise<AccountSettings>
   /** Which account the app is showing. */
   currentAccountId(): Promise<string | null>
+  /** Show a different account. */
+  switchAccount(accountId: string): Promise<void>
+  /** Forget an account: its folder, its task, and its place on the list. */
+  forgetAccount(accountId: string): Promise<void>
   saveSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   setCredentials(clientId: string, clientSecret: string): Promise<{ ok: boolean }>
   authenticate(): Promise<{ ok: boolean; email?: string }>
@@ -109,7 +113,7 @@ export interface IpcDeps {
   /** Forget the Google connection: the token, the client id and the secret. */
   resetConnection(): Promise<void>
   /** Archive the manifest and start a new one, for a different account. */
-  startFreshManifest(): Promise<void>
+  startFreshManifest(accountId: string): Promise<void>
   /** Take a new schedule into account, without waiting for a restart. */
   applySchedule(accountId: string): Promise<void>
   /** Start the app with Windows, or stop doing so. */
@@ -172,16 +176,16 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle(
     'drive-mirror:override-guard',
-    async (_event, accountId: string, mirrorName: string) => {
-      return deps.runner.syncNow(accountId, mirrorName, { overrideGuard: true })
+    async (_event, accountId: string | undefined, mirrorName: string) => {
+      return deps.runner.syncNow(await accountOf(accountId), mirrorName, { overrideGuard: true })
     },
   )
 
-  ipcMain.handle('drive-mirror:rebase', async (_event, accountId: string, mirrorName: string) => {
-    await deps.runner.rebase(accountId, mirrorName)
+  ipcMain.handle('drive-mirror:rebase', async (_event, accountId: string | undefined, mirrorName: string) => {
+    await deps.runner.rebase(await accountOf(accountId), mirrorName)
   })
 
-  ipcMain.handle('drive-mirror:get-settings', () => deps.getSettings())
+  ipcMain.handle('drive-mirror:get-app-settings', () => deps.getSettings())
 
   ipcMain.handle('drive-mirror:get-account-settings', async (_event, accountId?: string) =>
     deps.getAccountSettings(await accountOf(accountId)),
@@ -189,14 +193,14 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle(
     'drive-mirror:save-account-settings',
-    async (_event, accountId: string, patch: Partial<AccountSettings>) => {
-      const next = await deps.saveAccountSettings(accountId, patch)
+    async (_event, accountId: string | undefined, patch: Partial<AccountSettings>) => {
+      const next = await deps.saveAccountSettings(await accountOf(accountId), patch)
       return next
     },
   )
 
   ipcMain.handle(
-    'drive-mirror:save-settings',
+    'drive-mirror:save-app-settings',
     async (_event, patch: Partial<AppSettings>) => {
       const next = await deps.saveSettings(patch)
       if (patch.startWithWindows !== undefined) {
@@ -214,14 +218,23 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle('drive-mirror:authenticate', () => deps.authenticate())
 
-  ipcMain.handle('drive-mirror:sign-out', async (_event, accountId: string) =>
-    await deps.signOut(accountId),
+  ipcMain.handle('drive-mirror:sign-out', async (_event, accountId: string | undefined) =>
+    await deps.signOut(await accountOf(accountId)),
   )
+
+  ipcMain.handle('drive-mirror:switch-account', async (_event, accountId: string | undefined) => {
+    await deps.switchAccount(await accountOf(accountId))
+  })
+
+  ipcMain.handle('drive-mirror:forget-account', async (_event, accountId: string | undefined) => {
+    await deps.forgetAccount(await accountOf(accountId))
+    return { ok: true }
+  })
 
   ipcMain.handle('drive-mirror:open-log-folder', () => deps.openLogFolder())
 
-  ipcMain.handle('drive-mirror:show-manifest', async (_event, accountId: string) => {
-    await deps.showManifest(accountId)
+  ipcMain.handle('drive-mirror:show-manifest', async (_event, accountId: string | undefined) => {
+    await deps.showManifest(await accountOf(accountId))
   })
 
   ipcMain.handle('drive-mirror:choose-folder', async () => deps.chooseFolder())
@@ -235,7 +248,7 @@ export function registerIpc(deps: IpcDeps): void {
       accountId: string,
       config: { name: string; root: string; drivePath: string },
     ) => {
-      const settings = await deps.getAccountSettings(accountId)
+      const settings = await deps.getAccountSettings(await accountOf(accountId))
       const problems = validateMirror(config, settings.mirrors)
       if (problems.length > 0) {
         return { ok: false, message: problems.map((p) => p.message).join(' ') }
@@ -247,7 +260,7 @@ export function registerIpc(deps: IpcDeps): void {
         (m) =>
           !(m.removedAt && m.name.toLowerCase() === config.name.toLowerCase()),
       )
-      await deps.saveAccountSettings(accountId, {
+      await deps.saveAccountSettings(await accountOf(accountId), {
         mirrors: [...kept, { ...config, enabled: true }],
       })
       return { ok: true }
@@ -256,8 +269,8 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle(
     'drive-mirror:update-mirror',
-    async (_event, accountId: string, config: { name: string; drivePath: string }) => {
-      const settings = await deps.getAccountSettings(accountId)
+    async (_event, accountId: string | undefined, config: { name: string; drivePath: string }) => {
+      const settings = await deps.getAccountSettings(await accountOf(accountId))
       const existing = settings.mirrors.find((m) => m.name === config.name)
       if (!existing) {
         return { ok: false, message: `There is no mirror called ${config.name}.` }
@@ -272,13 +285,13 @@ export function registerIpc(deps: IpcDeps): void {
       }
       if (existing.drivePath !== config.drivePath) {
         const moved = await deps.runner.moveMirrorDestination(
-          accountId,
+          await accountOf(accountId),
           existing.name,
           config.drivePath,
         )
         if (!moved.ok) return moved
       }
-      await deps.saveAccountSettings(accountId, {
+      await deps.saveAccountSettings(await accountOf(accountId), {
         mirrors: settings.mirrors.map((m) =>
           m.name === existing.name ? { ...m, drivePath: config.drivePath } : m,
         ),
@@ -287,9 +300,9 @@ export function registerIpc(deps: IpcDeps): void {
     },
   )
 
-  ipcMain.handle('drive-mirror:remove-mirror', async (_event, accountId: string, name: string) => {
-    const settings = await deps.getAccountSettings(accountId)
-    await deps.saveAccountSettings(accountId, {
+  ipcMain.handle('drive-mirror:remove-mirror', async (_event, accountId: string | undefined, name: string) => {
+    const settings = await deps.getAccountSettings(await accountOf(accountId))
+    await deps.saveAccountSettings(await accountOf(accountId), {
       mirrors: settings.mirrors.map((m) =>
         m.name === name
           ? { ...m, removedAt: new Date().toISOString(), enabled: false }
@@ -301,33 +314,33 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle(
     'drive-mirror:set-mirror-enabled',
-    async (_event, accountId: string, name: string, enabled: boolean) => {
-      const settings = await deps.getAccountSettings(accountId)
-      await deps.saveAccountSettings(accountId, {
+    async (_event, accountId: string | undefined, name: string, enabled: boolean) => {
+      const settings = await deps.getAccountSettings(await accountOf(accountId))
+      await deps.saveAccountSettings(await accountOf(accountId), {
         mirrors: settings.mirrors.map((m) => (m.name === name ? { ...m, enabled } : m)),
       })
       return { ok: true }
     },
   )
 
-  ipcMain.handle('drive-mirror:get-schedule', async (_event, accountId: string) => {
-    const settings = await deps.getAccountSettings(accountId)
+  ipcMain.handle('drive-mirror:get-schedule', async (_event, accountId: string | undefined) => {
+    const settings = await deps.getAccountSettings(await accountOf(accountId))
     return settings.schedule
   })
 
   ipcMain.handle(
     'drive-mirror:save-schedule',
-    async (_event, accountId: string, patch: Partial<ScheduleConfig>) => {
-      const settings = await deps.getAccountSettings(accountId)
+    async (_event, accountId: string | undefined, patch: Partial<ScheduleConfig>) => {
+      const settings = await deps.getAccountSettings(await accountOf(accountId))
       if (patch.shape && !isValidShape(patch.shape)) {
         throw new Error('that schedule cannot be run')
       }
       // The schedule is merged, not replaced: a change to one part of it
       // must not wipe the rest.
       const next = { ...settings.schedule, ...patch }
-      await deps.saveAccountSettings(accountId, { schedule: next })
+      await deps.saveAccountSettings(await accountOf(accountId), { schedule: next })
       // The app has to act on the change now, not at the next start-up.
-      await deps.applySchedule(accountId)
+      await deps.applySchedule(await accountOf(accountId))
       return next
     },
   )
@@ -337,15 +350,15 @@ export function registerIpc(deps: IpcDeps): void {
     return { ok: true }
   })
 
-  ipcMain.handle('drive-mirror:start-fresh-manifest', async () => {
-    await deps.startFreshManifest()
+  ipcMain.handle('drive-mirror:reset-account-history', async (_event, accountId: string | undefined) => {
+    await deps.startFreshManifest(await accountOf(accountId))
     return { ok: true }
   })
 
   ipcMain.handle(
     'drive-mirror:download-restored',
-    async (_event, accountId: string, mirror: string, driveFileId: string) => {
-      return deps.runner.downloadRestored(accountId, mirror, driveFileId)
+    async (_event, accountId: string | undefined, mirror: string, driveFileId: string) => {
+      return deps.runner.downloadRestored(await accountOf(accountId), mirror, driveFileId)
     },
   )
 

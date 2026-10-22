@@ -506,6 +506,22 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         }
       },
       authenticate,
+      async switchAccount(accountId: string) {
+        // Which account the app is showing. Everything on screen changes
+        // with it: the mirrors, the schedule, the notice.
+        await accountRegistry.setCurrent(accountId)
+      },
+      async forgetAccount(accountId: string) {
+        // The account's folder goes, and so does its Windows task: a task
+        // that outlives its account keeps firing.
+        const app = await currentSettings()
+        const account = app.accounts.find((a) => a.id === accountId)
+        if (account) await unregisterTask(account.email)
+        schedulers.get(accountId)?.stop()
+        schedulers.delete(accountId)
+        clients.delete(accountId)
+        await accountRegistry.forget(accountId)
+      },
       async signOut(accountId: string) {
         // The sign-in goes; the manifest, the mirrors and the schedule
         // stay, so signing back in restores the account exactly as it was.
@@ -548,10 +564,9 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         }
         await credentialStore.clear()
       },
-      async startFreshManifest() {
+      async startFreshManifest(accountId: string) {
         // The old manifest is kept, so a change of heart costs nothing.
-        const id = await currentAccountId()
-        if (!id) return
+        const id = accountId
         const archiveDir = join(accountDir(appDataDir(), id), 'manifest-archive')
         await mkdir(archiveDir, { recursive: true })
         const store = createManifestStore(accountDir(appDataDir(), id))

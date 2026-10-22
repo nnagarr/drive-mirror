@@ -29,8 +29,10 @@ const PRELOAD_CHANNELS = [
   'drive-mirror:sync-now',
   'drive-mirror:override-guard',
   'drive-mirror:rebase',
-  'drive-mirror:get-settings',
-  'drive-mirror:save-settings',
+  'drive-mirror:get-app-settings',
+  'drive-mirror:save-app-settings',
+  'drive-mirror:switch-account',
+  'drive-mirror:forget-account',
   'drive-mirror:get-account-settings',
   'drive-mirror:save-account-settings',
   'drive-mirror:set-credentials',
@@ -47,7 +49,7 @@ const PRELOAD_CHANNELS = [
   'drive-mirror:get-schedule',
   'drive-mirror:save-schedule',
   'drive-mirror:reset-connection',
-  'drive-mirror:start-fresh-manifest',
+  'drive-mirror:reset-account-history',
   'drive-mirror:download-restored',
   'drive-mirror:open-external',
 ]
@@ -95,6 +97,8 @@ function stubDeps(): IpcDeps {
     getAccountSettings: async (_accountId: string) => defaultAccountSettings(),
     saveAccountSettings: async (_accountId: string, _patch: unknown) => defaultAccountSettings(),
     currentAccountId: async () => 'acc_test',
+    switchAccount: async (_accountId: string) => undefined,
+    forgetAccount: async (_accountId: string) => undefined,
     setCredentials: async () => ({ ok: true }),
     authenticate: async () => ({ ok: true }),
     signOut: async () => undefined,
@@ -116,6 +120,25 @@ describe('the IPC surface', () => {
     for (const channel of PRELOAD_CHANNELS) {
       expect(handlers.has(channel)).toBe(true)
     }
+  })
+
+  it('routes an account-scoped call to the account it names', async () => {
+    const seen: string[] = []
+    const deps = stubDeps()
+    deps.runner.state = async (accountId: string) => {
+      seen.push(accountId)
+      return {
+        mirrors: [],
+        running: false,
+        phase: 'idle',
+        lastRun: null,
+        accountEmail: null,
+        needsAuth: false,
+      }
+    }
+    registerIpc(deps)
+    await handlers.get('drive-mirror:get-state')!(null, 'acc_7f3a2b')
+    expect(seen).toEqual(['acc_7f3a2b'])
   })
 
   it('registers no channel twice', () => {
