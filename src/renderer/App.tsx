@@ -194,7 +194,7 @@ export function App(): JSX.Element {
     // The state, the account's settings, and the note left by a run the
     // user did not watch.
     void refresh()
-    void window.driveMirror.getUpdateStatus().then(setUpdateInfo)
+    void window.driveMirror.getUpdateStatus().then(setUpdateInfo).catch(() => undefined)
 
     return off
   }, [refresh])
@@ -398,6 +398,8 @@ export function App(): JSX.Element {
                     <button
                       type="button"
                       className="button button--sage"
+                      disabled={state?.running ?? false}
+                      title={state?.running ? 'Cannot restart while sync is running' : undefined}
                       onClick={() => window.driveMirror.installUpdate()}
                     >
                       Restart & Install

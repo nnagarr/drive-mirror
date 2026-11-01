@@ -451,6 +451,14 @@ export function registerIpc(deps: IpcDeps): void {
   })
 
   ipcMain.handle('drive-mirror:install-update', async () => {
+    const id = await deps.currentAccountId()
+    if (id) {
+      const state = await deps.runner.state(id)
+      if (state.running) {
+        return { ok: false, message: 'cannot install update while sync is in progress' }
+      }
+    }
     deps.updater.installUpdate()
+    return { ok: true }
   })
 }

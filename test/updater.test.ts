@@ -141,7 +141,7 @@ describe('UpdateManager', () => {
     expect(backend.checkForUpdates).not.toHaveBeenCalled()
   })
 
-  it('calls quitAndInstall on installUpdate', () => {
+  it('calls quitAndInstall on installUpdate only when downloaded', () => {
     const backend = new MockUpdaterBackend()
     const manager = createUpdateManager({
       backend,
@@ -149,7 +149,48 @@ describe('UpdateManager', () => {
       isPackaged: true,
     })
 
+    // Ignored when not downloaded
+    manager.installUpdate()
+    expect(backend.quitAndInstall).not.toHaveBeenCalled()
+
+    // Allowed when downloaded
+    backend.emit('update-downloaded', { version: '1.1.0' })
     manager.installUpdate()
     expect(backend.quitAndInstall).toHaveBeenCalled()
   })
+
+  it('deduplicates concurrent downloadUpdate calls and sets downloading status immediately', async () => {
+    const backend = new MockUpdaterBackend()
+    backend.downloadUpdate.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    const manager = createUpdateManager({
+      backend,
+      currentVersion: '1.0.0',
+      isPackaged: true,
+    })
+
+    const d1 = manager.downloadUpdate()
+    expect(manager.getStatus().status).toBe('downloading')
+    const d2 = manager.downloadUpdate()
+    await Promise.all([d1, d2])
+
+    expect(backend.downloadUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not interrupt an active download when checkForUpdates is called', async () => {
+    const backend = new MockUpdaterBackend()
+    backend.downloadUpdate.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    const manager = createUpdateManager({
+      backend,
+      currentVersion: '1.0.0',
+      isPackaged: true,
+    })
+
+    void manager.downloadUpdate()
+    expect(manager.getStatus().status).toBe('downloading')
+
+    const res = await manager.checkForUpdates()
+    expect(res.status).toBe('downloading')
+    expect(backend.checkForUpdates).not.toHaveBeenCalled()
+  })
 })
+

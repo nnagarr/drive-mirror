@@ -250,6 +250,7 @@ export function AppSettingsTab({
             <button
               type="button"
               className="button button--sage"
+              disabled={running}
               onClick={() => onInstallUpdate?.()}
             >
               Restart and install v{updateInfo.availableVersion}

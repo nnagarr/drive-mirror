@@ -65,6 +65,7 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
   }
 
   let activeCheckPromise: Promise<UpdateInfo> | null = null
+  let activeDownloadPromise: Promise<void> | null = null
 
   function setStatus(next: Partial<UpdateInfo>): void {
     currentStatus = { ...currentStatus, ...next }
@@ -153,6 +154,10 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
         return currentStatus
       }
 
+      if (currentStatus.status === 'downloading' || activeDownloadPromise) {
+        return currentStatus
+      }
+
       if (currentStatus.status === 'checking' && activeCheckPromise) {
         return activeCheckPromise
       }
@@ -181,22 +186,38 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
         return
       }
 
-      if (currentStatus.status === 'downloading' || currentStatus.status === 'downloaded') {
+      if (activeDownloadPromise) {
+        return activeDownloadPromise
+      }
+
+      if (currentStatus.status === 'downloaded') {
         return
       }
 
-      try {
-        await deps.backend.downloadUpdate()
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err ?? 'Failed to download update')
-        deps.log?.(`Download update failed: ${message}`)
-        setStatus({ status: 'error', error: message })
-      }
+      setStatus({ status: 'downloading', progress: 0, error: undefined })
+
+      activeDownloadPromise = (async () => {
+        try {
+          await deps.backend.downloadUpdate()
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err ?? 'Failed to download update')
+          deps.log?.(`Download update failed: ${message}`)
+          setStatus({ status: 'error', error: message })
+        } finally {
+          activeDownloadPromise = null
+        }
+      })()
+
+      return activeDownloadPromise
     },
 
     installUpdate(): void {
       if (!isPackaged) {
         deps.log?.('Cannot quit and install in unpackaged environment')
+        return
+      }
+      if (currentStatus.status !== 'downloaded') {
+        deps.log?.('Cannot install update: no update has been downloaded')
         return
       }
       deps.backend.quitAndInstall()
@@ -249,3 +270,4 @@ export class ElectronAutoUpdaterBackend implements UpdaterBackend {
     return this
   }
 }
+

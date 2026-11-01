@@ -198,4 +198,20 @@ describe('the IPC surface', () => {
     expect(checkSpy).toHaveBeenCalled()
     expect(res).toEqual({ status: 'available', currentVersion: '1.0.0' })
   })
+  it('refuses install-update when sync is running', async () => {
+    const deps = stubDeps()
+    deps.runner.state = async () => ({
+      accountId: 'acc_test',
+      mirrors: [],
+      running: true,
+      phase: 'syncing',
+      lastRun: null,
+      accountEmail: null,
+      needsAuth: false,
+    })
+    registerIpc(deps)
+
+    const result = await handlers.get('drive-mirror:install-update')!(null)
+    expect(result).toEqual({ ok: false, message: 'cannot install update while sync is in progress' })
+  })
 })
