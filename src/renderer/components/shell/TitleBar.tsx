@@ -37,6 +37,7 @@ export function TitleBar({ section, icon }: TitleBarProps): JSX.Element {
           </svg>
         )}
         <span className="titlebar__app">Drive Mirror</span>
+        <span className="titlebar__version">v1.0.1</span>
       </div>
       {section && <span className="titlebar__section">{section}</span>}
       <div className="titlebar__drag" aria-hidden="true" />

@@ -66,6 +66,17 @@
   color: var(--ink);
 }
 
+.titlebar__version {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ink-subtle, #71717a);
+  background: var(--surface-2, rgba(0, 0, 0, 0.05));
+  border: 1px solid var(--line-strong, rgba(0, 0, 0, 0.12));
+  padding: 1px 6px;
+  border-radius: 9999px;
+  letter-spacing: 0.02em;
+}
+
 .titlebar__section {
   font-size: 11.5px;
   color: var(--muted);
