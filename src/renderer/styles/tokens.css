@@ -1,0 +1,72 @@
+/* Design tokens — Modern Minimalist Zinc palette with Tech Blue accents.
+   High-contrast cool architectural zinc with blue brand & safe accents.
+   Follows Windows theme via prefers-color-scheme: dark. */
+:root {
+  color-scheme: light dark;
+
+  /* Typography */
+  --font: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-serif: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+  --mono: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+
+  /* Surfaces */
+  --bg: #F4F4F5;
+  --surface: #FFFFFF;
+  --surface-2: #E4E4E7;
+  --surface-3: #D4D4D8;
+
+  /* Text */
+  --ink: #09090B;
+  --muted: #71717A;
+  --muted-strong: #52525B;
+  --faint: #A1A1AA;
+
+  /* Lines */
+  --line: #E4E4E7;
+  --line-strong: #D4D4D8;
+
+  /* Brand / status */
+  --sage: #0067C0;
+  --sage-hover: #005A9E;
+  --sage-soft: #EBF3FC;
+  --safe: #0067C0;
+  --safe-soft: #EBF3FC;
+  --attention: #D97706;
+  --attention-soft: #FEF3C7;
+  --danger: #EF4444;
+  --danger-soft: #FEE2E2;
+
+  /* Primary button */
+  --primary: #09090B;
+  --primary-ink: #FFFFFF;
+
+  /* Focus */
+  --focus: #0067C0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #09090B;
+    --surface: #121215;
+    --surface-2: #18181B;
+    --surface-3: #27272A;
+    --ink: #F4F4F5;
+    --muted: #A1A1AA;
+    --muted-strong: #D4D4D8;
+    --faint: #71717A;
+    --line: #27272A;
+    --line-strong: #3F3F46;
+    --sage: #60A5FA;
+    --sage-hover: #93C5FD;
+    --sage-soft: #1E293B;
+    --safe: #60A5FA;
+    --safe-soft: #1E293B;
+    --attention: #FBBF24;
+    --attention-soft: #451A03;
+    --danger: #F87171;
+    --danger-soft: #450A0A;
+    --primary: #F4F4F5;
+    --primary-ink: #09090B;
+    --focus: #60A5FA;
+  }
+}

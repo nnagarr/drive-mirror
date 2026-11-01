@@ -1,0 +1,412 @@
+/**
+ * The plan executor.
+ *
+ * The diff engine decides what should happen; this module does it. The two
+ * are kept apart so that the decisions can be tested without a network and
+ * without a disk.
+ *
+ * Two properties matter more than anything else here.
+ *
+ * **Order.** Folders are created before uploads, uploads before downloads,
+ * downloads before trashes. Trashing last means a run that dies halfway
+ * leaves a file on Drive that was about to be trashed, rather than a Drive
+ * copy removed before the local side was confirmed.
+ *
+ * **Nothing is kept locally.** A file that changes replaces the copy on
+ * Drive, and a file that is deleted goes to the Drive trash, where Google
+ * keeps it for thirty days. The app keeps no second copy of anything.
+ */
+
+import { createReadStream } from 'node:fs'
+import { mkdir, readdir, stat } from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
+import type { Readable } from 'node:stream'
+import { applyManifestOp } from './manifest'
+import { baseName, canon, parentPath } from './paths'
+import type { DriveClient } from '../drive/client'
+import type { ManifestStore } from './manifest'
+import type { ManifestOp, MirrorManifest, Report } from './types'
+import type { PlanStep, SyncAction, SyncPlan } from './diff'
+
+/** The phases a run goes through, in order. */
+export type Phase = 'folders' | 'uploads' | 'downloads' | 'trashes'
+
+/** A progress notification for the interface. */
+export interface ProgressEvent {
+  phase: Phase
+  relPath: string
+  kind: SyncAction['kind']
+  status: 'start' | 'done' | 'failed'
+  message?: string
+  /** How many steps are finished, and how many there are in all. */
+  done: number
+  total: number
+}
+
+/** How far through a plan a run is. */
+export interface ProgressCounter {
+  done: number
+  total: number
+}
+
+/** What a run did. */
+export interface SyncRunResult {
+  uploaded: number
+  replaced: number
+  downloaded: number
+  exported: number
+  trashed: number
+  untrashed: number
+  errors: Array<{ relPath: string; message: string }>
+  reports: Report[]
+  manifest: MirrorManifest
+}
+
+/** Everything the executor needs from the outside world. */
+export interface ExecutorContext {
+  client: DriveClient
+  store: ManifestStore
+  manifest: MirrorManifest
+  /** Absolute path of the mirror root on disk. */
+  root: string
+  onProgress?: (event: ProgressEvent) => void
+}
+
+/** The action kinds in each phase, in phase order. */
+const PHASES: Array<{ phase: Phase; kinds: SyncAction['kind'][] }> = [
+  { phase: 'folders', kinds: ['create-folder'] },
+  { phase: 'uploads', kinds: ['upload', 'replace-content', 'untrash'] },
+  { phase: 'downloads', kinds: ['download', 'export-native'] },
+  { phase: 'trashes', kinds: ['trash'] },
+]
+
+/**
+ * Run a plan.
+ *
+ * The plan is a list of steps; each step is one action plus the manifest
+ * writes that follow it. A step that fails is recorded and skipped: one bad
+ * file never stops the rest of the mirror.
+ */
+export async function executePlan(
+  plan: SyncPlan,
+  ctx: ExecutorContext,
+): Promise<SyncRunResult> {
+  const result: SyncRunResult = {
+    uploaded: 0,
+    replaced: 0,
+    downloaded: 0,
+    exported: 0,
+    trashed: 0,
+    untrashed: 0,
+    errors: [],
+    reports: [...plan.reports],
+    manifest: ctx.manifest,
+  }
+
+  const mirrorName = basename(ctx.root)
+
+  // The steps that do something are the ones the progress bar counts.
+  // The steps that only record are bookkeeping and are counted out.
+  const counter: ProgressCounter = {
+    done: 0,
+    total: plan.steps.filter((step) => step.action).length,
+  }
+
+  // The steps that act on Drive, grouped by phase.
+  for (const { phase, kinds } of PHASES) {
+    for (const step of plan.steps) {
+      if (!step.action || !kinds.includes(step.action.kind)) continue
+      await runStep(step, phase, ctx, result, mirrorName, counter)
+    }
+  }
+
+  // The steps that only record something. They carry no Drive action, so
+  // they cannot fail, and they are applied last so the manifest describes
+  // the state the run ended in.
+  for (const step of plan.steps) {
+    if (step.action) continue
+    await applyOps(step.ops, ctx, mirrorName)
+  }
+
+  return result
+}
+
+/** Run one step: act on Drive, then record it. */
+async function runStep(
+  step: PlanStep,
+  phase: Phase,
+  ctx: ExecutorContext,
+  result: SyncRunResult,
+  mirrorName: string,
+  counter: ProgressCounter,
+): Promise<void> {
+  const action = step.action!
+  ctx.onProgress?.({
+    phase,
+    relPath: action.relPath,
+    kind: action.kind,
+    status: 'start',
+    done: counter.done,
+    total: counter.total,
+  })
+
+  /** Manifest writes the step produced beyond its own ops. */
+  let extraOps: ManifestOp[] = []
+  /** Rewrites the step's ops once the Drive side is known. */
+  let patch: (op: ManifestOp) => ManifestOp = (op) => op
+
+  try {
+    switch (action.kind) {
+      case 'create-folder': {
+        const parent = parentPath(action.relPath)
+        const parentId = folderIdFor(ctx.manifest, parent)
+        if (!parentId) {
+          throw new Error(`the Drive folder for "${parent || '.'}" is not known yet`)
+        }
+        const name =
+          (await localDisplayName(ctx.root, action.relPath)) ?? baseName(action.relPath)
+        const created = await ctx.client.createFolder(name, parentId)
+        extraOps = [{ op: 'set-dir', path: action.relPath, driveFolderId: created.id }]
+        break
+      }
+
+      case 'upload': {
+        const parent = parentPath(action.relPath)
+        const parentId = folderIdFor(ctx.manifest, parent)
+        if (!parentId) {
+          throw new Error(`the Drive folder for "${parent || '.'}" is not known yet`)
+        }
+        const name =
+          (await localDisplayName(ctx.root, action.localPath)) ?? baseName(action.relPath)
+
+        // The write-ahead intent: if the app dies between the upload and
+        // the manifest write, the next run must not conclude that the file
+        // was deleted locally and restore it.
+        await ctx.store.appendJournal({
+          op: 'intent',
+          kind: 'create-upload',
+          mirror: mirrorName,
+          path: action.relPath,
+          parentId,
+          localMd5: action.md5,
+          size: action.size,
+        })
+
+        const created = await ctx.client.createFile(
+          name,
+          parentId,
+          await localStream(join(ctx.root, action.localPath)),
+          { md5: action.md5, size: action.size },
+        )
+
+        const createdId = created.id
+        patch = (op) => {
+          if (op.op === 'set-file' && !op.entry.driveFileId) {
+            return {
+              ...op,
+              entry: { ...op.entry, driveFileId: createdId, driveMd5: action.md5 },
+            }
+          }
+          return op
+        }
+        result.uploaded += 1
+        break
+      }
+
+      case 'replace-content': {
+        await ctx.client.updateContent(
+          action.driveFileId,
+          await localStream(join(ctx.root, action.localPath)),
+          { md5: action.md5, size: action.size },
+        )
+        result.replaced += 1
+        break
+      }
+
+      case 'untrash': {
+        await ctx.store.appendJournal({
+          op: 'intent',
+          kind: 'untrash',
+          mirror: mirrorName,
+          path: action.relPath,
+          driveFileId: action.driveFileId,
+        })
+        await ctx.client.untrash(action.driveFileId)
+        result.untrashed += 1
+        break
+      }
+
+      case 'download': {
+        const driveName = await driveNameOf(ctx.client, action.driveFileId, action.relPath)
+        const dest = join(
+          ctx.root,
+          parentPath(action.localPath),
+          withDriveName(baseName(action.localPath), driveName),
+        )
+        await mkdir(dirname(dest), { recursive: true })
+        await ctx.client.downloadTo(action.driveFileId, dest)
+        result.downloaded += 1
+        break
+      }
+
+      case 'export-native': {
+        const driveName = await driveNameOf(ctx.client, action.driveFileId, action.relPath)
+        const dest = join(
+          ctx.root,
+          parentPath(action.localPath),
+          withDriveName(baseName(action.localPath), driveName),
+        )
+        await mkdir(dirname(dest), { recursive: true })
+        await ctx.client.exportTo(action.driveFileId, dest, action.exportMime)
+        result.exported += 1
+        break
+      }
+
+      case 'trash': {
+        await ctx.client.trash(action.driveFileId)
+        result.trashed += 1
+        break
+      }
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    result.errors.push({ relPath: action.relPath, message })
+    counter.done += 1
+    ctx.onProgress?.({
+      phase,
+      relPath: action.relPath,
+      kind: action.kind,
+      status: 'failed',
+      message,
+      done: counter.done,
+      total: counter.total,
+    })
+    return
+  }
+
+  counter.done += 1
+  ctx.onProgress?.({
+    phase,
+    relPath: action.relPath,
+    kind: action.kind,
+    status: 'done',
+    done: counter.done,
+    total: counter.total,
+  })
+
+  await applyOps(step.ops, ctx, mirrorName, patch)
+  if (extraOps.length > 0) {
+    await applyOps(extraOps, ctx, mirrorName)
+  }
+}
+
+/** Apply manifest writes and record them in the journal. */
+async function applyOps(
+  ops: ManifestOp[],
+  ctx: ExecutorContext,
+  mirrorName: string,
+  patch: (op: ManifestOp) => ManifestOp = (op) => op,
+): Promise<void> {
+  for (const op of ops) {
+    const final = patch(op)
+    applyManifestOp(ctx.manifest, final)
+    await ctx.store.appendJournal({
+      op: 'change',
+      mirror: mirrorName,
+      change: final,
+    })
+  }
+}
+
+/** The Drive folder id that holds a canonical directory path. */
+function folderIdFor(manifest: MirrorManifest, dir: string): string | undefined {
+  if (dir === '') return manifest.driveFolderId
+  return manifest.dirs[dir]?.driveFolderId
+}
+
+/**
+ * The name of a local path as it is spelled on disk.
+ *
+ * Paths are compared canonically, so the plan carries lowercased names. The
+ * file on disk is called "Scene.psd" and the plan says "scene.psd"; using
+ * the plan's spelling would rename the user's file on Drive.
+ */
+export async function localDisplayName(
+  root: string,
+  relPath: string,
+): Promise<string | null> {
+  const segments = relPath.split('/').filter((s) => s.length > 0)
+  if (segments.length === 0) return null
+
+  let abs = root
+  for (let i = 0; i < segments.length; i += 1) {
+    let entries: Dirent[]
+    try {
+      entries = await readdir(abs, { withFileTypes: true })
+    } catch {
+      return null
+    }
+    const wanted = segments[i]!.toLowerCase()
+    const match = entries.find((e) => e.name.toLowerCase() === wanted)
+    if (!match) return null
+    if (i === segments.length - 1) return match.name
+    abs = join(abs, match.name)
+  }
+  return null
+}
+
+/**
+ * The Drive file's own name.
+ *
+ * The plan carries a canonical path; the Drive file carries the name the
+ * user sees.
+ */
+async function driveNameOf(
+  client: DriveClient,
+  driveFileId: string,
+  fallbackPath: string,
+): Promise<string> {
+  try {
+    const node = await client.getFile(driveFileId)
+    if (node) return node.entry.name
+  } catch {
+    // Fall through to the plan's spelling.
+  }
+  return baseName(fallbackPath)
+}
+
+/**
+ * Restore the Drive file's spelling in a planned leaf name.
+ *
+ * Only the leading part that corresponds to the Drive file's own name is
+ * replaced, so a planned export path such as "budget (export 1).csv" for a
+ * Drive file called "Budget" becomes "Budget (export 1).csv" and keeps its
+ * disambiguating suffix.
+ */
+function withDriveName(plannedLeaf: string, driveName: string): string {
+  const canonical = canon(driveName)
+  if (canonical.length === 0) return plannedLeaf
+  if (!plannedLeaf.toLowerCase().startsWith(canonical)) return plannedLeaf
+  return driveName + plannedLeaf.slice(canonical.length)
+}
+
+/**
+ * A stream of a local file, for uploading.
+ *
+ * The file is checked first so that a missing file produces a clear error
+ * instead of an asynchronous stream failure that the client may never see.
+ * The stream also carries an error handler, so a client that rejects without
+ * reading the body cannot leave an unhandled error and a locked file
+ * behind.
+ */
+async function localStream(abs: string): Promise<Readable> {
+  try {
+    await stat(abs)
+  } catch {
+    throw new Error(`the local file "${abs}" could not be read`)
+  }
+  const stream = createReadStream(abs)
+  stream.on('error', () => {})
+  return stream
+}
