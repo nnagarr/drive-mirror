@@ -15,6 +15,7 @@ import type { Runner } from './runner'
 import type { AppSettings, ScheduleConfig } from './settings'
 import { defaultAccountSettings } from './accountSettings'
 import type { AccountSettings } from './accountSettings'
+import type { UpdateInfo, UpdateManager } from './updater'
 
 /** What the interface shows for one mirror. */
 export interface MirrorCard {
@@ -85,6 +86,7 @@ export type AppEvent =
   | { type: 'guard'; accountId: string; mirror: string; reason: string; message: string; canOverride: boolean }
   | { type: 'notice'; accountId: string | null; message: string }
   | { type: 'error'; accountId: string | null; message: string }
+  | { type: 'update-status'; accountId: null; status: UpdateInfo }
 
 /** What the handlers need from the app. */
 export interface IpcDeps {
@@ -121,6 +123,7 @@ export interface IpcDeps {
   applySchedule(accountId: string): Promise<void>
   /** Start the app with Windows, or stop doing so. */
   applyAutoLaunch(enabled: boolean): void
+  updater: UpdateManager
   /** Called when the run as a whole fails. */
   onError?: (message: string) => void
 }
@@ -434,5 +437,20 @@ export function registerIpc(deps: IpcDeps): void {
     if (/^https?:\/\//i.test(url)) {
       await shell.openExternal(url)
     }
+  })
+  ipcMain.handle('drive-mirror:get-update-status', async () => {
+    return deps.updater.getStatus()
+  })
+
+  ipcMain.handle('drive-mirror:check-for-updates', async () => {
+    return deps.updater.checkForUpdates()
+  })
+
+  ipcMain.handle('drive-mirror:download-update', async () => {
+    return deps.updater.downloadUpdate()
+  })
+
+  ipcMain.handle('drive-mirror:install-update', async () => {
+    deps.updater.installUpdate()
   })
 }

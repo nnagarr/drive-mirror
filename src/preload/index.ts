@@ -16,6 +16,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppEvent, AppState, RunSummary } from '../main/ipc'
 import type { AppSettings, ScheduleConfig } from '../main/settings'
 import type { AccountSettings } from '../main/accountSettings'
+import type { UpdateInfo } from '../main/updater'
 
 export interface DriveMirrorApi {
   getState(accountId?: string): Promise<AppState>
@@ -78,9 +79,13 @@ export interface DriveMirrorApi {
     accountId?: string,
   ): Promise<{ ok: true; path: string } | { ok: false; message: string }>
   /** Open a link in the browser, never inside the app. */
-  openExternal(url: string): Promise<void>
+    openExternal(url: string): Promise<void>
   /** The app's icon, as a data the interface can show. */
   appIcon(): Promise<string>
+  getUpdateStatus(): Promise<UpdateInfo>
+  checkForUpdates(): Promise<UpdateInfo>
+  downloadUpdate(): Promise<void>
+  installUpdate(): Promise<void>
   onEvent(cb: (event: AppEvent) => void): () => void
 }
 
@@ -132,8 +137,12 @@ const api: DriveMirrorApi = {
     ipcRenderer.invoke('drive-mirror:reset-account-history', accountId),
   downloadRestored: (mirror: string, driveFileId: string, accountId?: string) =>
     ipcRenderer.invoke('drive-mirror:download-restored', accountId, mirror, driveFileId),
-  openExternal: (url: string) => ipcRenderer.invoke('drive-mirror:open-external', url),
+    openExternal: (url: string) => ipcRenderer.invoke('drive-mirror:open-external', url),
   appIcon: () => ipcRenderer.invoke('drive-mirror:app-icon'),
+  getUpdateStatus: () => ipcRenderer.invoke('drive-mirror:get-update-status'),
+  checkForUpdates: () => ipcRenderer.invoke('drive-mirror:check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('drive-mirror:download-update'),
+  installUpdate: () => ipcRenderer.invoke('drive-mirror:install-update'),
   onEvent: (cb: (event: AppEvent) => void) => {
     const listener = (_event: unknown, payload: AppEvent): void => cb(payload)
     ipcRenderer.on(EVENT_CHANNEL, listener)

@@ -53,6 +53,10 @@ const PRELOAD_CHANNELS = [
   'drive-mirror:reset-account-history',
   'drive-mirror:download-restored',
   'drive-mirror:open-external',
+  'drive-mirror:get-update-status',
+  'drive-mirror:check-for-updates',
+  'drive-mirror:download-update',
+  'drive-mirror:install-update',
 ]
 
 /** A set of dependencies that do nothing but answer. */
@@ -126,6 +130,13 @@ function stubDeps(): IpcDeps {
     startFreshManifest: async () => undefined,
     applySchedule: async () => undefined,
     applyAutoLaunch: () => undefined,
+    updater: {
+      getStatus: () => ({ status: 'idle', currentVersion: '1.0.0' }),
+      checkForUpdates: async () => ({ status: 'idle', currentVersion: '1.0.0' }),
+      downloadUpdate: async () => undefined,
+      installUpdate: () => undefined,
+      onChange: () => () => {},
+    },
   }
 }
 
@@ -176,5 +187,15 @@ describe('the IPC surface', () => {
     handlers.clear()
     registerIpc(stubDeps())
     expect(handlers.size).toBe(PRELOAD_CHANNELS.length)
+  })
+  it('routes update requests to UpdateManager', async () => {
+    const deps = stubDeps()
+    const checkSpy = vi.fn().mockResolvedValue({ status: 'available', currentVersion: '1.0.0' })
+    deps.updater.checkForUpdates = checkSpy
+    registerIpc(deps)
+
+    const res = await handlers.get('drive-mirror:check-for-updates')!(null)
+    expect(checkSpy).toHaveBeenCalled()
+    expect(res).toEqual({ status: 'available', currentVersion: '1.0.0' })
   })
 })
