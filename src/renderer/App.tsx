@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { AddMirrorDialog } from './components/AddMirrorDialog'
 import { Onboarding } from './components/onboarding/Onboarding'
@@ -12,6 +12,8 @@ import type { AppEvent, AppState, RunSummary } from '../main/ipc'
 import type { AppSettings } from '../main/settings'
 import type { AccountSettings } from '../main/accountSettings'
 import { suggestDrivePath } from '../core/mirrorConfig'
+import { nextFireAt } from '../core/schedule'
+import { formatFriendlyDate } from './format'
 
 function autoMirrorName(folderPath: string): string {
   const segment = folderPath.split(/[\\/]/).filter(Boolean).pop() ?? ''
@@ -316,6 +318,20 @@ export function App(): JSX.Element {
     await refresh()
   }, [refresh, settings])
 
+  const nextBackup = useMemo(() => {
+    if (!accountSettings?.schedule?.enabled) return null
+    if (accountSettings.schedule.nextRunAt) {
+      const formatted = formatFriendlyDate(accountSettings.schedule.nextRunAt)
+      if (formatted) return formatted
+    }
+    try {
+      const nextDate = nextFireAt(accountSettings.schedule.shape, new Date(), accountSettings.schedule.lastRunAt)
+      return formatFriendlyDate(nextDate.toISOString())
+    } catch {
+      return null
+    }
+  }, [accountSettings?.schedule])
+
   return (
     <div className="app">
       <TitleBar section={view === 'overview' ? undefined : view === 'activity' ? 'Activity' : 'Settings'} icon={icon} />
@@ -326,6 +342,7 @@ export function App(): JSX.Element {
           view={view}
           activeAccount={settings?.accounts.find((a) => a.id === settings?.currentAccountId) ?? null}
           activeFolderCount={mirrors.reduce((n, m) => n + m.fileCount, 0)}
+          nextBackup={nextBackup}
           onSwitch={(id) => void switchAccount(id)}
           onConnect={() => void connectAccount()}
           onSelect={(next) => void setView(next)}

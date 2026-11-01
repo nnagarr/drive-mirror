@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { formatFriendlyDate } from '../format'
 import type { JSX } from 'react'
 import type { ScheduleConfig, ScheduleShape } from '../../main/settings'
 
@@ -166,21 +167,6 @@ export function SchedulePanel({
       {status && <p className="dialog__status">{status}</p>}
     </div>
   )
-}
-
-function formatFriendlyDate(iso: string): string {
-  try {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return iso
-    return d.toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })
-  } catch {
-    return iso
-  }
 }
 
 function NumberField({

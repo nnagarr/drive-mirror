@@ -217,13 +217,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
 
       if (schedule.mechanism === 'windows-task') {
+        const next = nextFireAt(shape!, deps.now(), lastRunAt)
         if (!(await deps.taskExists())) {
           await deps.registerTask(
             shape!,
             deps.exePath(),
-            nextFireAt(shape!, deps.now(), lastRunAt),
+            next,
           )
         }
+        await persist({ nextRunAt: next.toISOString() })
       } else {
         await removeTask()
       }
@@ -250,19 +252,22 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // The task must not outlive the schedule that asked for it.
         await removeTask()
         stopTimer()
+        await persist({ nextRunAt: null })
         return
       }
 
       if (schedule.mechanism === 'windows-task') {
         // The app's own timer must not also run.
         stopTimer()
+        const next = nextFireAt(shape!, deps.now(), lastRunAt)
         if (!(await deps.taskExists())) {
           await deps.registerTask(
             shape!,
             deps.exePath(),
-            nextFireAt(shape!, deps.now(), lastRunAt),
+            next,
           )
         }
+        await persist({ nextRunAt: next.toISOString() })
         return
       }
 

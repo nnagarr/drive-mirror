@@ -224,4 +224,12 @@ describe('the scheduler', () => {
 
     expect(h.settings.schedule.lastRunAt).toBe(now.toISOString())
   })
+  it('persists nextRunAt for windows-task mechanism', async () => {
+    const h = harness({ mechanism: 'windows-task' })
+    const s = createScheduler(h.deps)
+
+    await s.start()
+
+    expect(h.settings.schedule.nextRunAt).not.toBeNull()
+  })
 })

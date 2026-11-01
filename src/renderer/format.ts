@@ -91,3 +91,23 @@ export function summaryIsQuiet(summary: RunOutcome): boolean {
     summary.reports.length === 0
   )
 }
+
+/**
+ * Format an ISO date string into a friendly localized human-readable date.
+ * Returns null if the input is null, undefined, empty, or unparseable.
+ */
+export function formatFriendlyDate(iso: string | null | undefined): string | null {
+  if (!iso) return null
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return null
+    return d.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+  } catch {
+    return null
+  }
+}

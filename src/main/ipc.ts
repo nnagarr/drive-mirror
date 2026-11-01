@@ -402,7 +402,8 @@ export function registerIpc(deps: IpcDeps): void {
       await deps.saveAccountSettings(id, { schedule: next })
       // The app has to act on the change now, not at the next start-up.
       await deps.applySchedule(id)
-      return next
+      const updated = await deps.getAccountSettings(id)
+      return updated.schedule
     },
   )
 

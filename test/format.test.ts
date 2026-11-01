@@ -5,6 +5,7 @@ import {
   pluralize,
   countWith,
   formatLastRunCounts,
+  formatFriendlyDate,
 } from '../src/renderer/format'
 
 describe('what the summary bar says about a run', () => {
@@ -104,5 +105,24 @@ describe('formatLastRunCounts', () => {
 
   it('includes moved to trash when non-zero', () => {
     expect(formatLastRunCounts({ uploaded: 0, updated: 0, downloaded: 0, trashed: 2, errors: 1 })).toBe('2 moved to trash · 1 errors')
+  })
+})
+
+describe('formatFriendlyDate', () => {
+  it('returns null for empty or null', () => {
+    expect(formatFriendlyDate(null)).toBeNull()
+    expect(formatFriendlyDate(undefined)).toBeNull()
+    expect(formatFriendlyDate('')).toBeNull()
+  })
+
+  it('formats valid iso date', () => {
+    const formatted = formatFriendlyDate('2026-11-02T03:00:00.000Z')
+    expect(typeof formatted).toBe('string')
+    expect(formatted).toContain('Nov')
+    expect(formatted).toContain('2')
+  })
+
+  it('returns null for invalid date string', () => {
+    expect(formatFriendlyDate('invalid')).toBeNull()
   })
 })
