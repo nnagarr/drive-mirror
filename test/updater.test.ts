@@ -192,5 +192,45 @@ describe('UpdateManager', () => {
     expect(res.status).toBe('downloading')
     expect(backend.checkForUpdates).not.toHaveBeenCalled()
   })
+
+  it('treats GitHub 406 / no published releases error as not-available instead of crashing', () => {
+    const backend = new MockUpdaterBackend()
+    const manager = createUpdateManager({
+      backend,
+      currentVersion: '1.0.0',
+      isPackaged: true,
+    })
+
+    backend.emit(
+      'error',
+      new Error(
+        'Cannot parse releases feed: Error: Unable to find latest version on GitHub (https://github.com/nnagarr/drive-mirror/releases/latest), please ensure a production release exists: HttpError: 406 "method: GET url: https://github.com/nnagarr/drive-mirror/releases\n\n Data:\n \n " Headers: { ... }'
+      )
+    )
+
+    const status = manager.getStatus()
+    expect(status.status).toBe('not-available')
+    expect(status.error).toBeUndefined()
+  })
+
+  it('sanitizes long XML/header error strings into clean error messages', () => {
+    const backend = new MockUpdaterBackend()
+    const manager = createUpdateManager({
+      backend,
+      currentVersion: '1.0.0',
+      isPackaged: true,
+    })
+
+    backend.emit(
+      'error',
+      new Error(
+        'Cannot find channelFile in the latest release artifacts, XML: <?xml version="1.0"?> Headers: {...}'
+      )
+    )
+
+    const status = manager.getStatus()
+    expect(status.status).toBe('error')
+    expect(status.error).toBe('Cannot find channelFile in the latest release artifacts')
+  })
 })
 

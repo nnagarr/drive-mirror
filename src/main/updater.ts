@@ -37,6 +37,19 @@ export interface UpdaterBackend {
   off?(event: string, listener: (...args: any[]) => void): this
 }
 
+function cleanErrorMessage(err: unknown): { isNoRelease: boolean; message: string } {
+  const raw = err instanceof Error ? err.message : String(err ?? 'Unknown update error')
+  const isNoRelease =
+    raw.includes('Unable to find latest version on GitHub') ||
+    raw.includes('No published versions on GitHub') ||
+    raw.includes('ERR_UPDATER_LATEST_VERSION_NOT_FOUND') ||
+    raw.includes('ERR_UPDATER_NO_PUBLISHED_VERSIONS') ||
+    (raw.includes('406') && raw.includes('releases'))
+
+  const message = raw.split('\n')[0]!.split(', XML:')[0]!.split(',\nXML:')[0]!.split('Headers:')[0]!.trim()
+  return { isNoRelease, message }
+}
+
 export interface UpdateManagerDeps {
   backend: UpdaterBackend
   currentVersion: string
@@ -134,12 +147,13 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
   })
 
   deps.backend.on('error', (err: any) => {
-    const message = err instanceof Error ? err.message : String(err ?? 'Unknown update error')
+    const { isNoRelease, message } = cleanErrorMessage(err)
     deps.log?.(`Updater error: ${message}`)
-    setStatus({
-      status: 'error',
-      error: message,
-    })
+    if (isNoRelease) {
+      setStatus({ status: 'not-available', error: undefined })
+    } else {
+      setStatus({ status: 'error', error: message })
+    }
   })
 
   return {
@@ -168,9 +182,13 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
         try {
           await deps.backend.checkForUpdates()
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err ?? 'Failed to check for updates')
+          const { isNoRelease, message } = cleanErrorMessage(err)
           deps.log?.(`Check for updates failed: ${message}`)
-          setStatus({ status: 'error', error: message })
+          if (isNoRelease) {
+            setStatus({ status: 'not-available', error: undefined })
+          } else {
+            setStatus({ status: 'error', error: message })
+          }
         } finally {
           activeCheckPromise = null
         }
