@@ -105,6 +105,8 @@ export interface AppSettings {
   extraBackupPath: string | null
   /** A problem with the app itself, shown once. */
   pendingNotice: { message: string; at: string } | null
+  /** Check for app updates automatically on startup. */
+  autoCheckUpdates: boolean
 }
 
 /** The encrypted credential file. */
@@ -139,6 +141,7 @@ export function defaultAppSettings(): AppSettings {
     startWithWindows: false,
     extraBackupPath: null,
     pendingNotice: null,
+    autoCheckUpdates: true,
   }
 }
 
@@ -300,6 +303,7 @@ function withDefaults(defaults: AppSettings, parsed: unknown): AppSettings {
     startWithWindows: mergeValue(defaults.startWithWindows, parsed.startWithWindows),
     extraBackupPath: mergeValue(defaults.extraBackupPath, parsed.extraBackupPath),
     pendingNotice: mergeValue(defaults.pendingNotice, parsed.pendingNotice),
+    autoCheckUpdates: mergeValue(defaults.autoCheckUpdates, parsed.autoCheckUpdates),
   }
 }
 

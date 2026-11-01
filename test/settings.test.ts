@@ -130,4 +130,15 @@ describe('the settings store', () => {
     expect(s.guardThreshold).toBe(defaultAppSettings().guardThreshold)
     expect(s.currentAccountId).toBeNull()
   })
+
+  it('defaults autoCheckUpdates to true and persists changes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
+    const store = createSettingsStore(join(dir, 'settings.json'))
+    const initial = await store.read()
+    expect(initial.autoCheckUpdates).toBe(true)
+
+    await store.patch({ autoCheckUpdates: false })
+    const updated = await store.read()
+    expect(updated.autoCheckUpdates).toBe(false)
+  })
 })

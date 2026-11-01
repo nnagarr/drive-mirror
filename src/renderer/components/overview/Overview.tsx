@@ -206,6 +206,7 @@ function emptySettings(): AppSettings {
     startWithWindows: false,
     extraBackupPath: null,
     pendingNotice: null,
+    autoCheckUpdates: true,
   }
 }
 
