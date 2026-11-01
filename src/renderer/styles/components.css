@@ -668,3 +668,46 @@ input[type="checkbox"],
   stroke-linejoin: round;
   vertical-align: middle;
 }
+
+/* --- Update Banner & Progress --- */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  border-left: 4px solid var(--accent, #4285f4);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.45;
+  margin-bottom: 16px;
+}
+
+.update-banner__text {
+  flex: 1;
+}
+
+.update-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--surface-3, rgba(0, 0, 0, 0.08));
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.update-progress-fill {
+  height: 100%;
+  background: var(--accent, #4285f4);
+  transition: width 0.2s ease;
+}

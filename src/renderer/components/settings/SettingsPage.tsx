@@ -2,11 +2,13 @@ import { useState } from 'react'
 import type { JSX } from 'react'
 import { AccountSettingsTab } from './AccountSettings'
 import { AppSettingsTab } from './AppSettings'
+import type { UpdateInfo } from '../../../main/updater'
 
 interface SettingsPageProps {
   settings: any
   accountSettings: any
   running: boolean
+  updateInfo?: UpdateInfo | null
   onClose: () => void
   onSyncNow: () => void
   onConnectAccount: () => void
@@ -21,13 +23,18 @@ interface SettingsPageProps {
     guardThreshold?: number
     startWithWindows?: boolean
     extraBackupPath?: string | null
+    autoCheckUpdates?: boolean
   }) => Promise<void>
+  onCheckForUpdates?: () => Promise<void>
+  onDownloadUpdate?: () => Promise<void>
+  onInstallUpdate?: () => void
 }
 
 export function SettingsPage({
   settings,
   accountSettings,
   running,
+  updateInfo,
   onClose,
   onSyncNow,
   onConnectAccount,
@@ -39,6 +46,9 @@ export function SettingsPage({
   onSaveCredentials,
   onResetConnection,
   onSaveSettings,
+  onCheckForUpdates,
+  onDownloadUpdate,
+  onInstallUpdate,
 }: SettingsPageProps): JSX.Element {
   const [tab, setTab] = useState<'account' | 'app'>('account')
 
@@ -88,10 +98,14 @@ export function SettingsPage({
           <AppSettingsTab
             settings={settings}
             running={running}
+            updateInfo={updateInfo}
             onSaveCredentials={onSaveCredentials}
             onConnectAccount={onConnectAccount}
             onResetConnection={onResetConnection}
             onSaveSettings={onSaveSettings}
+            onCheckForUpdates={onCheckForUpdates}
+            onDownloadUpdate={onDownloadUpdate}
+            onInstallUpdate={onInstallUpdate}
           />
         )}
       </div>

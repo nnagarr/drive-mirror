@@ -895,3 +895,7 @@
 .onboarding-step__skip:hover {
   color: var(--ink);
 }
+
+.settings-tab__status--error {
+  color: var(--danger, #ea4335);
+}

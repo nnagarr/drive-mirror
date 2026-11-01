@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
 import type { AppSettings } from '../../../main/settings'
+import type { UpdateInfo } from '../../../main/updater'
 import { Dialog } from '../ui/Dialog'
 
 interface AppSettingsTabProps {
@@ -9,25 +10,35 @@ interface AppSettingsTabProps {
   onConnectAccount: () => void
   onSaveCredentials: (clientId: string, clientSecret: string) => Promise<{ ok: boolean }>
   onResetConnection: () => Promise<void>
+  updateInfo?: UpdateInfo | null
   onSaveSettings: (patch: {
     guardThreshold?: number
     startWithWindows?: boolean
     extraBackupPath?: string | null
+    autoCheckUpdates?: boolean
   }) => Promise<void>
+  onCheckForUpdates?: () => Promise<void>
+  onDownloadUpdate?: () => Promise<void>
+  onInstallUpdate?: () => void
 }
 
 export function AppSettingsTab({
   settings,
   running,
+  updateInfo,
   onConnectAccount,
   onSaveCredentials,
   onResetConnection,
   onSaveSettings,
+  onCheckForUpdates,
+  onDownloadUpdate,
+  onInstallUpdate,
 }: AppSettingsTabProps): JSX.Element {
   const [clientId, setClientId] = useState(settings.clientId)
   const [clientSecret, setClientSecret] = useState('')
   const [guardThreshold, setGuardThreshold] = useState(settings.guardThreshold)
   const [startWithWindows, setStartWithWindows] = useState(settings.startWithWindows)
+  const [autoCheckUpdates, setAutoCheckUpdates] = useState(settings.autoCheckUpdates ?? true)
   const [credentialsChanged, setCredentialsChanged] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -36,8 +47,9 @@ export function AppSettingsTab({
     setClientId(settings.clientId)
     setGuardThreshold(settings.guardThreshold)
     setStartWithWindows(settings.startWithWindows)
+    setAutoCheckUpdates(settings.autoCheckUpdates ?? true)
     setCredentialsChanged(false)
-  }, [settings.clientId, settings.guardThreshold, settings.startWithWindows])
+  }, [settings.clientId, settings.guardThreshold, settings.startWithWindows, settings.autoCheckUpdates])
 
   const idChanged = clientId.trim() !== settings.clientId.trim()
   const secretRequired = idChanged && !settings.clientSecretSet
@@ -66,6 +78,7 @@ export function AppSettingsTab({
         guardThreshold: Math.max(1, Math.floor(guardThreshold)),
         startWithWindows,
         extraBackupPath: null,
+        autoCheckUpdates,
       })
       setStatus('Settings saved.')
     } catch (err) {
@@ -197,6 +210,72 @@ export function AppSettingsTab({
             opened it.
           </span>
         </div>
+      </div>
+
+      <div className="settings-tab__section">
+        <h3 className="settings-tab__section__title">Updates</h3>
+        <p className="settings-tab__hint">
+          Current version: <strong>v{updateInfo?.currentVersion || '1.0.0'}</strong>
+        </p>
+        <div className="settings-tab__field settings-tab__field--check">
+          <label className="field--inline">
+            <input
+              type="checkbox"
+              checked={autoCheckUpdates}
+              onChange={(event) => setAutoCheckUpdates(event.target.checked)}
+            />
+            <span>Check for updates automatically on startup</span>
+          </label>
+        </div>
+        <div className="settings-tab__actions">
+          <button
+            type="button"
+            className="button button--secondary"
+            disabled={running || updateInfo?.status === 'checking' || updateInfo?.status === 'downloading'}
+            onClick={() => onCheckForUpdates?.()}
+          >
+            {updateInfo?.status === 'checking' ? 'Checking for updates...' : 'Check for updates'}
+          </button>
+          {updateInfo?.status === 'available' && (
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={running}
+              onClick={() => onDownloadUpdate?.()}
+            >
+              Download v{updateInfo.availableVersion}
+            </button>
+          )}
+          {updateInfo?.status === 'downloaded' && (
+            <button
+              type="button"
+              className="button button--sage"
+              onClick={() => onInstallUpdate?.()}
+            >
+              Restart and install v{updateInfo.availableVersion}
+            </button>
+          )}
+        </div>
+        {updateInfo?.status === 'not-available' && (
+          <p className="settings-tab__status">You are on the latest version.</p>
+        )}
+        {updateInfo?.status === 'error' && (
+          <p className="settings-tab__status settings-tab__status--error">
+            {updateInfo.error || 'Failed to check for updates.'}
+          </p>
+        )}
+        {updateInfo?.status === 'downloading' && (
+          <div className="settings-tab__field">
+            <span className="field__hint">
+              Downloading update... {typeof updateInfo.progress === 'number' ? `${updateInfo.progress}%` : ''}
+            </span>
+            {typeof updateInfo.progress === 'number' && (
+              <div className="update-progress-bar">
+                <div className="update-progress-fill" style={{ width: `${updateInfo.progress}%` }} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="settings-tab__actions">
