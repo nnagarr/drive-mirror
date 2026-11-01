@@ -12,7 +12,7 @@ interface TitleBarProps {
   version?: string
 }
 
-export function TitleBar({ section, icon, version = '1.0.2' }: TitleBarProps): JSX.Element {
+export function TitleBar({ section, icon, version = '1.0.3' }: TitleBarProps): JSX.Element {
   const [loadError, setLoadError] = useState(false)
 
   return (
