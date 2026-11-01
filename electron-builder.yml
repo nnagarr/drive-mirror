@@ -1,4 +1,9 @@
 appId: com.drivemirror.app
+publish:
+  provider: github
+  owner: nnagarr
+  repo: drive-mirror
+  releaseType: release
 productName: Drive Mirror
 copyright: Drive Mirror
 
