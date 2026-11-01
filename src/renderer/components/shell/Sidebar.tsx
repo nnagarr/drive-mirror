@@ -52,6 +52,7 @@ export function Sidebar({
         currentAccountId={currentAccountId}
         onSwitch={onSwitch}
         onConnect={onConnect}
+        onManage={() => onSelect('settings')}
       />
       <Nav view={view} hasUpdate={hasUpdate} onSelect={onSelect} />
 

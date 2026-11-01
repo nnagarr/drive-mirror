@@ -144,14 +144,6 @@ export function FolderDrawer({
                 Pause
               </button>
             )}
-            <button
-              type="button"
-              className="button button--sage"
-              {...disabledWhileSyncing(racingDisabled)}
-              onClick={() => void onChangeDrive(mirror.name, mirror.drivePath)}
-            >
-              Change Drive folder
-            </button>
             <button type="button" className="button button--danger" onClick={() => void onRemove(mirror.name)}>
               Remove folder
             </button>
