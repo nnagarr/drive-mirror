@@ -145,6 +145,25 @@ npm run dist      # build the Windows installer into dist\
 
 The installer is built to `dist\Drive-Mirror-1.0.0-Setup.exe`.
 
+
+## Updates & Releases
+
+The application includes built-in auto-update checking:
+- **Automatic Checking**: When enabled in Settings, the app checks for new GitHub releases automatically on startup.
+- **On-Demand Checking**: You can manually click "Check for updates" under **Settings > This app**.
+- **In-App Notification**: An update banner appears when a new release is available or ready to install, allowing you to download and restart to apply the update seamlessly.
+
+### Publishing a Release
+
+Releases are automated via GitHub Actions:
+1. Bump the version in `package.json` (e.g. `"version": "1.0.1"`).
+2. Commit the change and push a version tag:
+   ```bash
+   git tag v1.0.1
+   git push origin v1.0.1
+   ```
+3. GitHub Actions builds the Windows NSIS installer and publishes `Drive-Mirror-1.0.1-Setup.exe` and `latest.yml` to the GitHub Release. Installed apps detect the update and notify the user.
+
 ## Architecture & Code Layout
 
 - `src/core/` - Pure decision engine: diff calculation, guard evaluation, and manifest tracking. No Electron or network dependencies.
