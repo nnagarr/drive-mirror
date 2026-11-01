@@ -107,6 +107,7 @@ const updateManager: UpdateManager = createUpdateManager({
   backend: new ElectronAutoUpdaterBackend(autoUpdater),
   currentVersion: app.getVersion(),
   isPackaged: app.isPackaged,
+  isAutoDownload: async () => (await currentSettings()).autoDownloadUpdates !== false,
   log: (message: string) => logger.log({ level: 'info', message }),
 })
 

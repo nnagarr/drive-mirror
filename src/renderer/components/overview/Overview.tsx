@@ -207,6 +207,7 @@ function emptySettings(): AppSettings {
     extraBackupPath: null,
     pendingNotice: null,
     autoCheckUpdates: true,
+    autoDownloadUpdates: true,
   }
 }
 

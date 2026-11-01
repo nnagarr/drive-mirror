@@ -136,9 +136,11 @@ describe('the settings store', () => {
     const store = createSettingsStore(join(dir, 'settings.json'))
     const initial = await store.read()
     expect(initial.autoCheckUpdates).toBe(true)
+    expect(initial.autoDownloadUpdates).toBe(true)
 
-    await store.patch({ autoCheckUpdates: false })
+    await store.patch({ autoCheckUpdates: false, autoDownloadUpdates: false })
     const updated = await store.read()
     expect(updated.autoCheckUpdates).toBe(false)
+    expect(updated.autoDownloadUpdates).toBe(false)
   })
 })

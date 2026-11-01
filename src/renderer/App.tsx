@@ -58,7 +58,6 @@ export function App(): JSX.Element {
   /** Something the user was not there to see. */
   const [notice, setNotice] = useState<string | null>(null)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
-  const [updateBannerDismissed, setUpdateBannerDismissed] = useState(false)
   /** The mirror being added, or the one being changed. */
   const [editing, setEditing] = useState<{ name: string; root: string; drivePath: string } | null>(
     null,
@@ -173,7 +172,6 @@ export function App(): JSX.Element {
           break
         case 'update-status':
           setUpdateInfo(event.status)
-          setUpdateBannerDismissed(false)
           break
       }
     })
@@ -379,48 +377,6 @@ export function App(): JSX.Element {
                 <button type="button" className="button button--quiet" onClick={() => setNotice(null)}>
                   Dismiss
                 </button>
-              </div>
-            )}
-            {updateInfo && !updateBannerDismissed && (updateInfo.status === 'available' || updateInfo.status === 'downloaded' || updateInfo.status === 'downloading') && (
-              <div className="update-banner" role="status">
-                <div className="update-banner__text">
-                  <strong>
-                    {updateInfo.status === 'downloaded'
-                      ? `Drive Mirror v${updateInfo.availableVersion ?? ''} is downloaded and ready to install.`
-                      : updateInfo.status === 'downloading'
-                        ? `Downloading Drive Mirror v${updateInfo.availableVersion ?? ''}... ${typeof updateInfo.progress === 'number' ? `${updateInfo.progress}%` : ''}`
-                        : `A new version of Drive Mirror (v${updateInfo.availableVersion ?? ''}) is available.`}
-                  </strong>
-                </div>
-                <div className="update-banner__actions">
-                  {updateInfo.status === 'available' && (
-                    <button
-                      type="button"
-                      className="button button--primary"
-                      onClick={() => void window.driveMirror.downloadUpdate()}
-                    >
-                      Download
-                    </button>
-                  )}
-                  {updateInfo.status === 'downloaded' && (
-                    <button
-                      type="button"
-                      className="button button--sage"
-                      disabled={state?.running ?? false}
-                      title={state?.running ? 'Cannot restart while sync is running' : undefined}
-                      onClick={() => window.driveMirror.installUpdate()}
-                    >
-                      Restart & Install
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="button button--quiet"
-                    onClick={() => setUpdateBannerDismissed(true)}
-                  >
-                    Dismiss
-                  </button>
-                </div>
               </div>
             )}
             {view === 'overview' && (

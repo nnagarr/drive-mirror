@@ -52,6 +52,40 @@ describe('UpdateManager', () => {
     expect(changes).toEqual(['checking', 'available'])
   })
 
+  it('automatically downloads update when isAutoDownload returns true', async () => {
+    const backend = new MockUpdaterBackend()
+    createUpdateManager({
+      backend,
+      currentVersion: '1.0.0',
+      isPackaged: true,
+      isAutoDownload: () => true,
+    })
+
+    backend.emit('update-available', {
+      version: '1.1.0',
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(backend.downloadUpdate).toHaveBeenCalled()
+  })
+
+  it('does not automatically download update when isAutoDownload returns false', async () => {
+    const backend = new MockUpdaterBackend()
+    createUpdateManager({
+      backend,
+      currentVersion: '1.0.0',
+      isPackaged: true,
+      isAutoDownload: () => false,
+    })
+
+    backend.emit('update-available', {
+      version: '1.1.0',
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(backend.downloadUpdate).not.toHaveBeenCalled()
+  })
+
   it('handles check for updates when no update is available', async () => {
     const backend = new MockUpdaterBackend()
     const manager = createUpdateManager({

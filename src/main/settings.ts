@@ -107,6 +107,8 @@ export interface AppSettings {
   pendingNotice: { message: string; at: string } | null
   /** Check for app updates automatically on startup. */
   autoCheckUpdates: boolean
+  /** Download updates automatically when available. */
+  autoDownloadUpdates: boolean
 }
 
 /** The encrypted credential file. */
@@ -142,6 +144,7 @@ export function defaultAppSettings(): AppSettings {
     extraBackupPath: null,
     pendingNotice: null,
     autoCheckUpdates: true,
+    autoDownloadUpdates: true,
   }
 }
 
@@ -304,6 +307,7 @@ function withDefaults(defaults: AppSettings, parsed: unknown): AppSettings {
     extraBackupPath: mergeValue(defaults.extraBackupPath, parsed.extraBackupPath),
     pendingNotice: mergeValue(defaults.pendingNotice, parsed.pendingNotice),
     autoCheckUpdates: mergeValue(defaults.autoCheckUpdates, parsed.autoCheckUpdates),
+    autoDownloadUpdates: mergeValue(defaults.autoDownloadUpdates, parsed.autoDownloadUpdates),
   }
 }
 

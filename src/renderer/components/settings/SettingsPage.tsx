@@ -24,6 +24,7 @@ interface SettingsPageProps {
     startWithWindows?: boolean
     extraBackupPath?: string | null
     autoCheckUpdates?: boolean
+    autoDownloadUpdates?: boolean
   }) => Promise<void>
   onCheckForUpdates?: () => Promise<void>
   onDownloadUpdate?: () => Promise<void>

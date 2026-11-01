@@ -54,6 +54,7 @@ export interface UpdateManagerDeps {
   backend: UpdaterBackend
   currentVersion: string
   isPackaged?: boolean
+  isAutoDownload?: () => boolean | Promise<boolean>
   log?: (message: string) => void
 }
 
@@ -91,12 +92,43 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
     }
   }
 
+  async function downloadUpdate(): Promise<void> {
+    if (!isPackaged) {
+      deps.log?.('Skipping update download in unpackaged environment')
+      return
+    }
+
+    if (activeDownloadPromise) {
+      return activeDownloadPromise
+    }
+
+    if (currentStatus.status === 'downloaded') {
+      return
+    }
+
+    setStatus({ status: 'downloading', progress: 0, error: undefined })
+
+    activeDownloadPromise = (async () => {
+      try {
+        await deps.backend.downloadUpdate()
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err ?? 'Failed to download update')
+        deps.log?.(`Download update failed: ${message}`)
+        setStatus({ status: 'error', error: message })
+      } finally {
+        activeDownloadPromise = null
+      }
+    })()
+
+    return activeDownloadPromise
+  }
+
   // Bind backend events
   deps.backend.on('checking-for-update', () => {
     setStatus({ status: 'checking', error: undefined })
   })
 
-  deps.backend.on('update-available', (info: any) => {
+  deps.backend.on('update-available', async (info: any) => {
     const availableVersion = info?.version ? String(info.version) : undefined
     const releaseDate = info?.releaseDate ? String(info.releaseDate) : undefined
     const releaseNotes = typeof info?.releaseNotes === 'string'
@@ -112,6 +144,16 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
       releaseNotes,
       error: undefined,
     })
+
+    try {
+      const autoDownload = await deps.isAutoDownload?.()
+      if (autoDownload) {
+        deps.log?.(`Auto-downloading update ${availableVersion ?? ''}`)
+        void downloadUpdate()
+      }
+    } catch (err) {
+      deps.log?.(`Auto-download check failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   })
 
   deps.backend.on('update-not-available', () => {
@@ -198,36 +240,7 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
       return activeCheckPromise
     },
 
-    async downloadUpdate(): Promise<void> {
-      if (!isPackaged) {
-        deps.log?.('Skipping update download in unpackaged environment')
-        return
-      }
-
-      if (activeDownloadPromise) {
-        return activeDownloadPromise
-      }
-
-      if (currentStatus.status === 'downloaded') {
-        return
-      }
-
-      setStatus({ status: 'downloading', progress: 0, error: undefined })
-
-      activeDownloadPromise = (async () => {
-        try {
-          await deps.backend.downloadUpdate()
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err ?? 'Failed to download update')
-          deps.log?.(`Download update failed: ${message}`)
-          setStatus({ status: 'error', error: message })
-        } finally {
-          activeDownloadPromise = null
-        }
-      })()
-
-      return activeDownloadPromise
-    },
+    downloadUpdate,
 
     installUpdate(): void {
       if (!isPackaged) {

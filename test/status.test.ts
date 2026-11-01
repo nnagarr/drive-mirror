@@ -23,7 +23,7 @@ const settings = (overrides: Partial<AppSettings> = {}): AppSettings => ({
   guardThreshold: 5,
   startWithWindows: false,
   extraBackupPath: null,
-  pendingNotice: null,  autoCheckUpdates: true,  ...overrides,
+  pendingNotice: null,  autoCheckUpdates: true,  autoDownloadUpdates: true,  ...overrides,
 })
 
 const card = (overrides: Partial<MirrorCard> = {}): MirrorCard => ({

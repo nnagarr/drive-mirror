@@ -16,6 +16,7 @@ interface AppSettingsTabProps {
     startWithWindows?: boolean
     extraBackupPath?: string | null
     autoCheckUpdates?: boolean
+    autoDownloadUpdates?: boolean
   }) => Promise<void>
   onCheckForUpdates?: () => Promise<void>
   onDownloadUpdate?: () => Promise<void>
@@ -39,6 +40,7 @@ export function AppSettingsTab({
   const [guardThreshold, setGuardThreshold] = useState(settings.guardThreshold)
   const [startWithWindows, setStartWithWindows] = useState(settings.startWithWindows)
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(settings.autoCheckUpdates ?? true)
+  const [autoDownloadUpdates, setAutoDownloadUpdates] = useState(settings.autoDownloadUpdates ?? true)
   const [credentialsChanged, setCredentialsChanged] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -48,8 +50,9 @@ export function AppSettingsTab({
     setGuardThreshold(settings.guardThreshold)
     setStartWithWindows(settings.startWithWindows)
     setAutoCheckUpdates(settings.autoCheckUpdates ?? true)
+    setAutoDownloadUpdates(settings.autoDownloadUpdates ?? true)
     setCredentialsChanged(false)
-  }, [settings.clientId, settings.guardThreshold, settings.startWithWindows, settings.autoCheckUpdates])
+  }, [settings.clientId, settings.guardThreshold, settings.startWithWindows, settings.autoCheckUpdates, settings.autoDownloadUpdates])
 
   const idChanged = clientId.trim() !== settings.clientId.trim()
   const secretRequired = idChanged && !settings.clientSecretSet
@@ -79,6 +82,7 @@ export function AppSettingsTab({
         startWithWindows,
         extraBackupPath: null,
         autoCheckUpdates,
+        autoDownloadUpdates,
       })
       setStatus('Settings saved.')
     } catch (err) {
@@ -225,6 +229,16 @@ export function AppSettingsTab({
               onChange={(event) => setAutoCheckUpdates(event.target.checked)}
             />
             <span>Check for updates automatically on startup</span>
+          </label>
+        </div>
+        <div className="settings-tab__field settings-tab__field--check">
+          <label className="field--inline">
+            <input
+              type="checkbox"
+              checked={autoDownloadUpdates}
+              onChange={(event) => setAutoDownloadUpdates(event.target.checked)}
+            />
+            <span>Automatically download updates when available</span>
           </label>
         </div>
         <div className="settings-tab__actions">
