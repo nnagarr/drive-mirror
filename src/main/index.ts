@@ -27,6 +27,9 @@ import { createAccountRegistry } from './accounts'
 import { migrateToAccounts } from './migrate'
 import { accountDir, accountManifestPath, appBackupDir } from './accountPaths'
 import { stripAccountFromLog } from './logFile'
+import { autoUpdater } from 'electron-updater'
+import { createUpdateManager, ElectronAutoUpdaterBackend } from './updater'
+import type { UpdateManager } from './updater'
 import { registerIpc } from './ipc'
 import { createMainWindow, appIconPath } from './window'
 import { createRunner, acquireSyncLock, releaseSyncLock } from './runner'
@@ -98,6 +101,17 @@ const credentialStore = createCredentialStore(
 const settingsStore = createSettingsStore(join(appDataDir(), 'settings.json'))
 
 const accountSettingsStore = createAccountSettingsStore(appDataDir())
+
+const updateManager: UpdateManager = createUpdateManager({
+  backend: new ElectronAutoUpdaterBackend(autoUpdater),
+  currentVersion: app.getVersion(),
+  isPackaged: app.isPackaged,
+  log: (message: string) => logger.log({ level: 'info', message }),
+})
+
+updateManager.onChange((status) => {
+  emit({ type: 'update-status', accountId: null, status })
+})
 
 const accountTokenStore = createAccountTokenStore(appDataDir(), safeStorage)
 
@@ -696,6 +710,7 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         if (!app.isPackaged) return
         app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath })
       },
+      updater: updateManager,
       onError: (message: string) => {
         emit({ type: 'error', accountId: null, message })
       },
@@ -705,7 +720,8 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       // The Windows task's launch: one sync, no window, then out. The
       // scheduler records when the run happened, so the next slot is
       // measured from this one.
-      const accounts = (await currentSettings()).accounts
+      const appSettings = await currentSettings()
+    const accounts = appSettings.accounts
       const named = cli.accountId
       if (named && !accounts.some((account) => account.id === named)) {
         // Nothing is run, and the reason is said out loud: a scheduled
@@ -755,9 +771,21 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
 
     // The schedules start last, so a run that was missed while the app
     // was closed happens after the window is up and can say so.
-    const accounts = (await currentSettings()).accounts
-    for (const account of accounts) {
+    const appSettings = await currentSettings()
+    const accounts = appSettings.accounts
+        for (const account of accounts) {
       await schedulerFor(account.id, account.email).start()
+    }
+
+    if (appSettings.autoCheckUpdates !== false && app.isPackaged) {
+      setTimeout(() => {
+        void updateManager.checkForUpdates().catch((err) => {
+          logger.log({
+            level: 'warn',
+            message: `auto-update check failed: ${err instanceof Error ? err.message : String(err)}`,
+          })
+        })
+      }, 5000)
     }
   })
 
