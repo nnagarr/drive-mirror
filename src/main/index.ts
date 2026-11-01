@@ -786,7 +786,7 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
             message: `auto-update check failed: ${err instanceof Error ? err.message : String(err)}`,
           })
         })
-      }, 5000)
+      }, 1500)
     }
   })
 

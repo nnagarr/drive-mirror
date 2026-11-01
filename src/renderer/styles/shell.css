@@ -371,6 +371,82 @@
   box-shadow: 0 1px 2px rgba(43, 39, 34, 0.05);
 }
 
+.nav__badge {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: auto;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* --- Sidebar Update Card --- */
+
+.sidebar__update {
+  margin-top: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar__update--ready {
+  border-color: var(--sage);
+}
+
+.sidebar__update + .sidebar__account {
+  margin-top: 0;
+}
+
+.sidebar__update__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.sidebar__update__title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+}
+
+.sidebar__update__version {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.sidebar__update__progress {
+  width: 100%;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.sidebar__update__progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.sidebar__update__action {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  justify-content: center;
+}
+
 /* --- Sidebar Total & Schedule Cards --- */
 
 .sidebar__account {

@@ -34,5 +34,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm run build
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            gh release create ${{ github.ref_name }} --title "${{ github.ref_name }}" --notes "Release ${{ github.ref_name }}" || true
+          }
           npx electron-builder --win --publish always
 

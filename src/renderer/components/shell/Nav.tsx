@@ -3,11 +3,13 @@ import type { JSX } from 'react'
 interface NavProps {
   /** Which section is active. */
   view: 'overview' | 'activity' | 'settings'
+  /** Whether an update is available or ready. */
+  hasUpdate?: boolean
   /** Switch to a section. */
   onSelect: (view: 'overview' | 'activity' | 'settings') => void
 }
 
-export function Nav({ view, onSelect }: NavProps): JSX.Element {
+export function Nav({ view, hasUpdate, onSelect }: NavProps): JSX.Element {
   const items: { id: 'overview' | 'activity' | 'settings'; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'activity', label: 'Activity' },
@@ -25,7 +27,10 @@ export function Nav({ view, onSelect }: NavProps): JSX.Element {
               aria-pressed={view === item.id}
               onClick={() => void onSelect(item.id)}
             >
-              {item.label}
+              <span>{item.label}</span>
+              {item.id === 'settings' && hasUpdate && (
+                <span className="nav__badge" title="Update available" />
+              )}
             </button>
           </li>
         ))}

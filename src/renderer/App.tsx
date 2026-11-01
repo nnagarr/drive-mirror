@@ -342,7 +342,11 @@ export function App(): JSX.Element {
 
   return (
     <div className="app">
-      <TitleBar section={view === 'overview' ? undefined : view === 'activity' ? 'Activity' : 'Settings'} icon={icon} />
+      <TitleBar
+        section={view === 'overview' ? undefined : view === 'activity' ? 'Activity' : 'Settings'}
+        icon={icon}
+        version={updateInfo?.currentVersion}
+      />
       <div className="shell">
         <Sidebar
           accounts={settings?.accounts ?? []}
@@ -351,9 +355,13 @@ export function App(): JSX.Element {
           activeAccount={settings?.accounts.find((a) => a.id === settings?.currentAccountId) ?? null}
           activeFolderCount={mirrors.reduce((n, m) => n + m.fileCount, 0)}
           nextBackup={nextBackup}
+          updateInfo={updateInfo}
+          isSyncing={state?.running ?? false}
           onSwitch={(id) => void switchAccount(id)}
           onConnect={() => void connectAccount()}
           onSelect={(next) => void setView(next)}
+          onDownloadUpdate={() => void window.driveMirror.downloadUpdate()}
+          onInstallUpdate={() => window.driveMirror.installUpdate()}
         />
         <main className="main">
           <div className="main-inner">

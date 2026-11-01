@@ -8,9 +8,11 @@ interface TitleBarProps {
   section?: string
   /** The account's avatar URL or app icon data URI. */
   icon?: string
+  /** The app's current version. */
+  version?: string
 }
 
-export function TitleBar({ section, icon }: TitleBarProps): JSX.Element {
+export function TitleBar({ section, icon, version = '1.0.2' }: TitleBarProps): JSX.Element {
   const [loadError, setLoadError] = useState(false)
 
   return (
@@ -37,7 +39,7 @@ export function TitleBar({ section, icon }: TitleBarProps): JSX.Element {
           </svg>
         )}
         <span className="titlebar__app">Drive Mirror</span>
-        <span className="titlebar__version">v1.0.1</span>
+        <span className="titlebar__version">v{version}</span>
       </div>
       {section && <span className="titlebar__section">{section}</span>}
       <div className="titlebar__drag" aria-hidden="true" />
