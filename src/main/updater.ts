@@ -284,7 +284,7 @@ export class ElectronAutoUpdaterBackend implements UpdaterBackend {
   }
 
   quitAndInstall(): void {
-    this.updater.quitAndInstall(false, true)
+    this.updater.quitAndInstall(true, true)
   }
 
   on(event: string, listener: (...args: any[]) => void): this {

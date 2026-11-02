@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { createUpdateManager } from '../src/main/updater'
+import { createUpdateManager, ElectronAutoUpdaterBackend } from '../src/main/updater'
 import type { UpdaterBackend } from '../src/main/updater'
 
 class MockUpdaterBackend extends EventEmitter implements UpdaterBackend {
@@ -265,6 +265,17 @@ describe('UpdateManager', () => {
     const status = manager.getStatus()
     expect(status.status).toBe('error')
     expect(status.error).toBe('Cannot find channelFile in the latest release artifacts')
+  })
+
+  it('ElectronAutoUpdaterBackend calls quitAndInstall with silent=true and forceRunAfter=true', () => {
+    const mock = {
+      autoDownload: true,
+      autoInstallOnAppQuit: false,
+      quitAndInstall: vi.fn(),
+    }
+    const backend = new ElectronAutoUpdaterBackend(mock)
+    backend.quitAndInstall()
+    expect(mock.quitAndInstall).toHaveBeenCalledWith(true, true)
   })
 })
 

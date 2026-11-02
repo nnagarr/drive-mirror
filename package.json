@@ -1,6 +1,6 @@
 {
   "name": "drive-mirror",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Mirror local folders up to Google Drive",
   "main": "./out/main/index.js",
   "type": "module",
