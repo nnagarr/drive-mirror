@@ -7,7 +7,7 @@
  * closes again. Nothing is exposed to the network.
  */
 
-import { app, BrowserWindow, dialog, Notification, powerMonitor, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, Notification, powerMonitor, safeStorage, screen, shell } from 'electron'
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -33,6 +33,7 @@ import { createUpdateManager, ElectronAutoUpdaterBackend } from './updater'
 import type { UpdateManager } from './updater'
 import { registerIpc } from './ipc'
 import { createMainWindow, appIconPath } from './window'
+import { validateWindowState } from './windowState'
 import { createRunner, acquireSyncLock, releaseSyncLock } from './runner'
 import type { AccountRuntime } from './runner'
 import { createScheduler } from './scheduler'
@@ -756,7 +757,21 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       return
     }
 
-    mainWindow = createMainWindow()
+    const appSettings = await currentSettings()
+    const validatedState = validateWindowState(
+      appSettings.windowState,
+      screen.getAllDisplays(),
+      screen.getPrimaryDisplay(),
+    )
+
+    mainWindow = createMainWindow(validatedState, (state) => {
+      void saveSettings({ windowState: state }).catch((err) => {
+        logger.log({
+          level: 'warn',
+          message: `Failed to save window state: ${err instanceof Error ? err.message : String(err)}`,
+        })
+      })
+    })
 
     // Fill in the file counts so the window shows the real trees before
     // the first run.
@@ -773,9 +788,8 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
 
     // The schedules start last, so a run that was missed while the app
     // was closed happens after the window is up and can say so.
-    const appSettings = await currentSettings()
     const accounts = appSettings.accounts
-        for (const account of accounts) {
+    for (const account of accounts) {
       await schedulerFor(account.id, account.email).start()
     }
 

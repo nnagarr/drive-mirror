@@ -313,16 +313,19 @@ function withDefaults(defaults: AppSettings, parsed: unknown): AppSettings {
     pendingNotice: mergeValue(defaults.pendingNotice, parsed.pendingNotice),
     autoCheckUpdates: mergeValue(defaults.autoCheckUpdates, parsed.autoCheckUpdates),
     autoDownloadUpdates: mergeValue(defaults.autoDownloadUpdates, parsed.autoDownloadUpdates),
-    windowState:
-      parsed.windowState && typeof parsed.windowState === 'object' && typeof parsed.windowState.width === 'number' && typeof parsed.windowState.height === 'number'
-        ? {
-            x: typeof parsed.windowState.x === 'number' ? parsed.windowState.x : undefined,
-            y: typeof parsed.windowState.y === 'number' ? parsed.windowState.y : undefined,
-            width: parsed.windowState.width,
-            height: parsed.windowState.height,
-            isMaximized: Boolean(parsed.windowState.isMaximized),
-          }
-        : undefined,
+    windowState: (() => {
+      const ws = isPlainObject(parsed.windowState) ? parsed.windowState : undefined
+      if (ws && typeof ws.width === 'number' && typeof ws.height === 'number') {
+        return {
+          x: typeof ws.x === 'number' ? ws.x : undefined,
+          y: typeof ws.y === 'number' ? ws.y : undefined,
+          width: ws.width,
+          height: ws.height,
+          isMaximized: Boolean(ws.isMaximized),
+        }
+      }
+      return undefined
+    })(),
   }
 }
 

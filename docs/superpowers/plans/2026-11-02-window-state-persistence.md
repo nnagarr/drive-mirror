@@ -146,3 +146,4 @@
   git add src/main/window.ts src/main/index.ts
   git commit -m "feat(window): restore and persist window bounds, maximize state, and monitor"
   ```
+

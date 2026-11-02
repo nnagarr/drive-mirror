@@ -9,6 +9,7 @@
 
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
+import type { WindowState } from './windowState'
 
 /** Where the preload script lives, in development and in a build. */
 function preloadPath(): string {
@@ -37,7 +38,10 @@ export function appIconPath(): string {
 /**
  * Create the app's window.
  */
-export function createMainWindow(): BrowserWindow {
+export function createMainWindow(
+  initialState?: WindowState,
+  onSaveState?: (state: WindowState) => void,
+): BrowserWindow {
   nativeTheme.themeSource = 'system'
 
   // The titlebar overlay colours live here because this is the only place
@@ -46,11 +50,13 @@ export function createMainWindow(): BrowserWindow {
   const overlaySymbols = (dark: boolean) => (dark ? '#F4F4F5' : '#09090B')
   const backgroundColour = (dark: boolean) => (dark ? '#09090B' : '#F4F4F5')
 
-    const initialDark = nativeTheme.shouldUseDarkColors
+  const initialDark = nativeTheme.shouldUseDarkColors
 
   const window = new BrowserWindow({
-    width: 1180,
-    height: 760,
+    x: initialState?.x,
+    y: initialState?.y,
+    width: initialState?.width ?? 1180,
+    height: initialState?.height ?? 760,
     minWidth: 960,
     minHeight: 640,
     show: false,
@@ -71,6 +77,63 @@ export function createMainWindow(): BrowserWindow {
     },
   })
 
+  // State tracking: keep track of normal (non-maximized) bounds and isMaximized
+  let normalBounds = {
+    x: initialState?.x,
+    y: initialState?.y,
+    width: initialState?.width ?? 1180,
+    height: initialState?.height ?? 760,
+  }
+  let isMaximized = Boolean(initialState?.isMaximized)
+  let saveTimer: NodeJS.Timeout | null = null
+
+  const triggerSave = (): void => {
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      onSaveState?.({
+        ...normalBounds,
+        isMaximized,
+      })
+    }, 300)
+  }
+
+  const flushSave = (): void => {
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    onSaveState?.({
+      ...normalBounds,
+      isMaximized,
+    })
+  }
+
+  const updateBounds = (): void => {
+    if (!window.isDestroyed() && !window.isMaximized() && !window.isMinimized()) {
+      const bounds = window.getBounds()
+      normalBounds = {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      }
+      isMaximized = false
+      triggerSave()
+    }
+  }
+
+  window.on('resize', updateBounds)
+  window.on('move', updateBounds)
+  window.on('maximize', () => {
+    isMaximized = true
+    triggerSave()
+  })
+  window.on('unmaximize', () => {
+    isMaximized = false
+    updateBounds()
+  })
+  window.on('close', flushSave)
+
   const applyTheme = (): void => {
     const dark = nativeTheme.shouldUseDarkColors
     window.setTitleBarOverlay({
@@ -84,6 +147,9 @@ export function createMainWindow(): BrowserWindow {
 
   window.once('ready-to-show', () => {
     applyTheme()
+    if (initialState?.isMaximized) {
+      window.maximize()
+    }
     window.show()
   })
   window.on('closed', () => nativeTheme.removeListener('updated', applyTheme))
@@ -104,6 +170,7 @@ export function createMainWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // In development, load from Vite's dev server if available, otherwise from built files.
   if (process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {

@@ -43,3 +43,4 @@ export interface WindowState {
 - On startup in `createMainWindow(state)`:
   - Supply `x`, `y`, `width`, `height` to `new BrowserWindow(...)`.
   - When showing, if `state.isMaximized` is true, call `window.maximize()`.
+
