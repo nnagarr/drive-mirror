@@ -132,3 +132,4 @@ describe('validateWindowState', () => {
     expect(result.isMaximized).toBe(true)
   })
 })
+
