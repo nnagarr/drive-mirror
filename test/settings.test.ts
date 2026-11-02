@@ -143,4 +143,23 @@ describe('the settings store', () => {
     expect(updated.autoCheckUpdates).toBe(false)
     expect(updated.autoDownloadUpdates).toBe(false)
   })
+
+  it('persists and restores windowState', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dm-settings-'))
+    const store = createSettingsStore(join(dir, 'settings.json'))
+    const initial = await store.read()
+    expect(initial.windowState).toBeUndefined()
+
+    const windowState = {
+      x: 150,
+      y: 200,
+      width: 1300,
+      height: 850,
+      isMaximized: true,
+    }
+
+    await store.patch({ windowState })
+    const updated = await store.read()
+    expect(updated.windowState).toEqual(windowState)
+  })
 })

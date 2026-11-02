@@ -43,6 +43,9 @@ import type { MirrorConfig } from '../core/mirrorConfig'
 import type { ScheduleShape } from '../core/schedule'
 export type { ScheduleShape } from '../core/schedule'
 
+import type { WindowState } from './windowState'
+export type { WindowState } from './windowState'
+
 export interface ScheduleConfig {
   /** Whether the app syncs on its own at all. */
   enabled: boolean
@@ -109,6 +112,8 @@ export interface AppSettings {
   autoCheckUpdates: boolean
   /** Download updates automatically when available. */
   autoDownloadUpdates: boolean
+  /** Last window bounds, position and maximized state. */
+  windowState?: WindowState
 }
 
 /** The encrypted credential file. */
@@ -308,6 +313,16 @@ function withDefaults(defaults: AppSettings, parsed: unknown): AppSettings {
     pendingNotice: mergeValue(defaults.pendingNotice, parsed.pendingNotice),
     autoCheckUpdates: mergeValue(defaults.autoCheckUpdates, parsed.autoCheckUpdates),
     autoDownloadUpdates: mergeValue(defaults.autoDownloadUpdates, parsed.autoDownloadUpdates),
+    windowState:
+      parsed.windowState && typeof parsed.windowState === 'object' && typeof parsed.windowState.width === 'number' && typeof parsed.windowState.height === 'number'
+        ? {
+            x: typeof parsed.windowState.x === 'number' ? parsed.windowState.x : undefined,
+            y: typeof parsed.windowState.y === 'number' ? parsed.windowState.y : undefined,
+            width: parsed.windowState.width,
+            height: parsed.windowState.height,
+            isMaximized: Boolean(parsed.windowState.isMaximized),
+          }
+        : undefined,
   }
 }
 
