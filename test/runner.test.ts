@@ -13,7 +13,7 @@ import { createManifestStore } from '../src/core/manifest'
 import { FakeDrive } from './helpers/fakeDrive'
 import { defaultAppSettings } from '../src/main/settings'
 import { defaultAccountSettings } from '../src/main/accountSettings'
-import type { AppEvent } from '../src/main/ipc'
+import type { AppEvent, RunSummary } from '../src/main/ipc'
 import type { DriveNode, Manifest } from '../src/core/types'
 import type { DriveClient } from '../src/drive/client'
 import type { AppSettings } from '../src/main/settings'
@@ -1079,6 +1079,82 @@ describe('changing where a mirror lives on Drive', () => {
     const r = runner(box)
     const result = await r.moveMirrorDestination(ACC, 'Nope', 'Photos')
     expect(result.ok).toBe(false)
+  })
+
+  it('hydrates newer lastRun and mirror lastSyncAt from disk even when state already had older values', async () => {
+    const box = await harness()
+    const r = runner(box)
+
+    // Initial run
+    const s1 = await r.syncNow(ACC)
+    const st1 = await r.state(ACC)
+    expect(st1.lastRun?.finishedAt).toBe(s1.finishedAt)
+
+    // Simulate an external background run writing newer run and manifest
+    const newerTime = new Date(Date.now() + 60_000).toISOString()
+    const newerSummary: RunSummary = {
+      startedAt: newerTime,
+      finishedAt: newerTime,
+      uploaded: 5,
+      updated: 0,
+      downloaded: 0,
+      trashed: 0,
+      errors: 0,
+      mirrors: [{ name: 'Medicine', counts: { uploaded: 5, updated: 0, downloaded: 0, trashed: 0, errors: 0 } }],
+      changed: [{ mirror: 'Medicine', relPath: 'new.txt', action: 'uploaded' }],
+      reports: [],
+    }
+    box.settings = {
+      ...box.settings,
+      lastRun: newerSummary,
+      mirrorState: { Medicine: { status: 'idle', counts: { uploaded: 5, updated: 0, downloaded: 0, trashed: 0, errors: 0 } } },
+    }
+    const manifest = await box.store.read()
+    manifest.mirrors.Medicine!.lastSyncAt = newerTime
+    await box.store.write(manifest)
+
+    const st2 = await r.state(ACC)
+    expect(st2.lastRun?.finishedAt).toBe(newerTime)
+    expect(st2.lastRun?.uploaded).toBe(5)
+    expect(st2.mirrors[0]?.lastSyncedAt).toBe(newerTime)
+    expect(st2.mirrors[0]?.counts.uploaded).toBe(5)
+  })
+
+  it('accumulates runHistory up to 10 entries in AppState and accountSettings', async () => {
+    const box = await harness()
+    const r = createRunner({
+      account: async (id) => ({
+        id,
+        email: box.email,
+        signedIn: true,
+        client: box.client,
+        store: box.store,
+        settings: async () => box.settings,
+      }),
+      appSettings: async () => box.appSettings,
+      backupPaths: async () => box.backupPaths,
+      saveAccountSettings: async (_id, patch) => {
+        box.settings = { ...box.settings, ...patch }
+        return box.settings
+      },
+      emit: () => {},
+      lockPath: box.lockPath,
+    })
+
+    // First run
+    await r.syncNow(ACC)
+    const st1 = await r.state(ACC)
+    expect(st1.runHistory?.length).toBe(1)
+    expect(box.settings.runHistory?.length).toBe(1)
+
+    // Wait 5ms for unique timestamp
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    // Second run
+    await r.syncNow(ACC)
+    const st2 = await r.state(ACC)
+    expect(st2.runHistory?.length).toBe(2)
+    expect(box.settings.runHistory?.length).toBe(2)
   })
 })
 

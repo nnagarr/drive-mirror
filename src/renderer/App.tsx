@@ -194,7 +194,22 @@ export function App(): JSX.Element {
     void refresh()
     void window.driveMirror.getUpdateStatus().then(setUpdateInfo).catch(() => undefined)
 
-    return off
+    // Re-check state whenever the window gains focus or periodically in the background
+    const onFocus = () => {
+      void refresh()
+    }
+    window.addEventListener('focus', onFocus)
+    const pollInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void refresh()
+      }
+    }, 15000)
+
+    return () => {
+      off()
+      window.removeEventListener('focus', onFocus)
+      clearInterval(pollInterval)
+    }
   }, [refresh])
 
   const sync = useCallback(async (mirrorName?: unknown) => {
@@ -402,6 +417,7 @@ export function App(): JSX.Element {
             {view === 'activity' && (
               <ActivityPage
                 summary={summary}
+                history={state?.runHistory ?? (accountSettings?.runHistory ?? (summary ? [summary] : []))}
                 running={state?.running ?? false}
                 signedOut={state?.needsAuth ?? false}
                 onSync={() => void sync()}

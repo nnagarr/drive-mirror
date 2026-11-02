@@ -328,6 +328,64 @@
   color: var(--faint);
 }
 
+.activity__history-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.activity__history-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.activity__history-list {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.activity__history-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.activity__history-item:hover {
+  background: var(--surface-hover, var(--line));
+}
+
+.activity__history-item--active {
+  border-color: var(--ink);
+  background: var(--surface-active, var(--surface));
+  box-shadow: 0 0 0 1px var(--ink);
+}
+
+.activity__history-time {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.activity__history-badge {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .activity__summary {
   display: flex;
   flex-direction: column;

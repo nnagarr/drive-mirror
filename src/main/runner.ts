@@ -207,6 +207,8 @@ interface AccountState {
   cards: Map<string, MirrorCard>
   /** The last run this account had. */
   lastRun: RunSummary | null
+  /** Recent runs this account had. */
+  runHistory: RunSummary[]
   /** Whether a run is going. */
   running: boolean
   /** Where the run has got to. */
@@ -250,6 +252,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       state = {
         cards: new Map<string, MirrorCard>(),
         lastRun: null,
+        runHistory: [],
         running: false,
         phase: 'idle',
         inFlight: null,
@@ -319,10 +322,16 @@ export function createRunner(deps: RunnerDeps): Runner {
     manifest: Manifest,
   ): AppState {
     const state = stateFor(accountId)
-    // Hydrate the last run from the persisted record, but never overwrite
-    // a run that happened this session.
-    if (state.lastRun === null && settings.lastRun) {
+    // Hydrate the last run from the persisted record whenever disk has a newer run
+    const isNewerRun =
+      settings.lastRun &&
+      (!state.lastRun || settings.lastRun.finishedAt >= state.lastRun.finishedAt)
+    if (isNewerRun && settings.lastRun) {
       state.lastRun = settings.lastRun
+    }
+    const historyFromSettings = settings.runHistory ?? (settings.lastRun ? [settings.lastRun] : [])
+    if (state.runHistory.length === 0 || isNewerRun) {
+      state.runHistory = historyFromSettings
     }
     return {
       accountId,
@@ -337,16 +346,18 @@ export function createRunner(deps: RunnerDeps): Runner {
             mirrorCard.counts.downloaded === 0 &&
             mirrorCard.counts.trashed === 0 &&
             mirrorCard.counts.errors === 0
-          if (hasZeroCounts) {
+          if (hasZeroCounts || isNewerRun) {
             mirrorCard.counts = { ...persisted.counts }
           }
-          if (mirrorCard.status === 'idle') {
+          if (mirrorCard.status === 'idle' || isNewerRun) {
             mirrorCard.status = persisted.status
           }
         }
         const mm = manifest.mirrors[config.name]
-        if (mirrorCard.lastSyncedAt === null && mm?.lastSyncAt) {
-          mirrorCard.lastSyncedAt = mm.lastSyncAt
+        if (mm?.lastSyncAt) {
+          if (!mirrorCard.lastSyncedAt || mm.lastSyncAt >= mirrorCard.lastSyncedAt) {
+            mirrorCard.lastSyncedAt = mm.lastSyncAt
+          }
         }
         if (mirrorCard.fileCount === 0 && mm?.lastCounts?.['']) {
           mirrorCard.fileCount = mm.lastCounts[''] ?? 0
@@ -379,6 +390,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       running: state.running,
       phase: state.phase,
       lastRun: state.lastRun,
+      runHistory: state.runHistory,
       accountEmail: account?.email ?? null,
       needsAuth: !(account?.signedIn ?? false),
     }
@@ -828,11 +840,18 @@ export function createRunner(deps: RunnerDeps): Runner {
             counts: { ...mirrorCard.counts },
           }
         }
+        const existingHistory = Array.isArray(current.runHistory) ? current.runHistory : []
+        const updatedHistory = [
+          summary,
+          ...existingHistory.filter((h) => h.finishedAt !== summary.finishedAt),
+        ].slice(0, 10)
         await deps.saveAccountSettings(accountId, {
           schedule: { ...current.schedule, lastRunAt: summary.finishedAt },
           lastRun: summary,
+          runHistory: updatedHistory,
           mirrorState,
         })
+        stateFor(accountId).runHistory = updatedHistory
       }
 
       stateFor(accountId).lastRun = summary
@@ -885,8 +904,15 @@ export function createRunner(deps: RunnerDeps): Runner {
       if (!account) return
       const settings = await account.settings()
       const state = stateFor(accountId)
-      if (state.lastRun === null && settings.lastRun) {
+      const isNewerRun =
+        settings.lastRun &&
+        (!state.lastRun || settings.lastRun.finishedAt >= state.lastRun.finishedAt)
+      if (isNewerRun && settings.lastRun) {
         state.lastRun = settings.lastRun
+      }
+      const primeHistory = settings.runHistory ?? (settings.lastRun ? [settings.lastRun] : [])
+      if (state.runHistory.length === 0 || isNewerRun) {
+        state.runHistory = primeHistory
       }
       const store = account.store
       const manifest = await store.read()
@@ -903,15 +929,19 @@ export function createRunner(deps: RunnerDeps): Runner {
             mirrorCard.counts.downloaded === 0 &&
             mirrorCard.counts.trashed === 0 &&
             mirrorCard.counts.errors === 0
-          if (hasZeroCounts) {
+          if (hasZeroCounts || isNewerRun) {
             mirrorCard.counts = { ...persisted.counts }
           }
-          if (mirrorCard.status === 'idle') {
+          if (mirrorCard.status === 'idle' || isNewerRun) {
             mirrorCard.status = persisted.status
           }
         }
         const mirrorManifest = manifest.mirrors[config.name]
-        mirrorCard.lastSyncedAt = mirrorManifest?.lastSyncAt ?? mirrorCard.lastSyncedAt
+        if (mirrorManifest?.lastSyncAt) {
+          if (!mirrorCard.lastSyncedAt || mirrorManifest.lastSyncAt >= mirrorCard.lastSyncedAt) {
+            mirrorCard.lastSyncedAt = mirrorManifest.lastSyncAt
+          }
+        }
         try {
           const local = await scanLocal({ root: config.root, knownPaths: [] })
           mirrorCard.fileCount = local.recursiveCounts[''] ?? mirrorCard.fileCount

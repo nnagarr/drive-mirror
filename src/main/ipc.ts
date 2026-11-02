@@ -74,6 +74,7 @@ export interface AppState {
   running: boolean
   phase: string
   lastRun: RunSummary | null
+  runHistory?: RunSummary[]
   accountEmail: string | null
   needsAuth: boolean
 }

@@ -36,6 +36,10 @@ export interface AccountSettings {
    */
   lastRun: RunSummary | null
   /**
+   * Recent sync history (up to 10 runs, newest first), kept across restarts.
+   */
+  runHistory?: RunSummary[]
+  /**
    * Per-mirror UI state kept across restarts: status and counts. Never
    * `syncing`, `running` or `phase`; a restart means no run is in flight.
    */
@@ -55,6 +59,7 @@ export function defaultAccountSettings(): AccountSettings {
     },
     pendingNotice: null,
     lastRun: null,
+    runHistory: [],
     mirrorState: {},
   }
 }
@@ -98,6 +103,13 @@ export function createAccountSettingsStore(root: string): AccountSettingsStore {
     const lastRun = isRunSummary(rawLastRun) ? (rawLastRun as RunSummary) : null
     // Validate the persisted mirror state: keep only entries whose status is
     // one of the stored statuses and whose counts look right.
+    const rawRunHistory = file.runHistory
+    const runHistory: RunSummary[] = Array.isArray(rawRunHistory)
+      ? (rawRunHistory.filter(isRunSummary) as RunSummary[]).slice(0, 10)
+      : []
+    if (runHistory.length === 0 && lastRun) {
+      runHistory.push(lastRun)
+    }
     const rawMirrorState = file.mirrorState
     const mirrorState: AccountSettings['mirrorState'] = {}
     if (isPlainObject(rawMirrorState)) {
@@ -115,6 +127,7 @@ export function createAccountSettingsStore(root: string): AccountSettingsStore {
       schedule: mergeValue(defaults.schedule, file.schedule),
       pendingNotice: mergeValue(defaults.pendingNotice, file.pendingNotice),
       lastRun,
+      runHistory,
       mirrorState,
     }
   }
