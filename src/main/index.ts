@@ -32,7 +32,9 @@ const { autoUpdater } = electronUpdater
 import { createUpdateManager, ElectronAutoUpdaterBackend } from './updater'
 import type { UpdateManager } from './updater'
 import { registerIpc } from './ipc'
-import { createMainWindow, appIconPath } from './window'
+import { createMainWindow, appIconPath, showMainWindow } from './window'
+import { createAppTray } from './tray'
+import type { TrayLike } from './tray'
 import { validateWindowState } from './windowState'
 import { createRunner, acquireSyncLock, releaseSyncLock } from './runner'
 import type { AccountRuntime } from './runner'
@@ -51,6 +53,8 @@ import type { AppEvent } from './ipc'
 const EVENT_CHANNEL = 'drive-mirror:event'
 
 let mainWindow: BrowserWindow | null = null
+let appTray: TrayLike | null = null
+let isQuitting = false
 const logger = createLogger(join(appDataDir(), 'logs'))
 
 /** Send an event to the interface. */
@@ -424,9 +428,15 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
   if (!syncOnce) {
     app.on('second-instance', () => {
       if (mainWindow) {
-        if (mainWindow.isMinimized()) mainWindow.restore()
-        mainWindow.focus()
+        showMainWindow(mainWindow)
       }
+    })
+    app.on('before-quit', () => {
+      isQuitting = true
+    })
+    app.on('will-quit', () => {
+      appTray?.destroy()
+      appTray = null
     })
   }
 
@@ -711,7 +721,11 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         // In development the executable is Electron's own, which is not
         // something to start with Windows.
         if (!app.isPackaged) return
-        app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath })
+        app.setLoginItemSettings({
+          openAtLogin: enabled,
+          path: process.execPath,
+          args: ['--hidden'],
+        })
       },
       updater: updateManager,
       onError: (message: string) => {
@@ -764,13 +778,48 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       screen.getPrimaryDisplay(),
     )
 
-    mainWindow = createMainWindow(validatedState, (state) => {
-      void saveSettings({ windowState: state }).catch((err) => {
-        logger.log({
-          level: 'warn',
-          message: `Failed to save window state: ${err instanceof Error ? err.message : String(err)}`,
+    appTray = createAppTray({
+      iconPath: appIconPath(),
+      onOpen: () => {
+        if (mainWindow) {
+          showMainWindow(mainWindow, validatedState)
+        }
+      },
+      onSyncNow: () => {
+        void (async () => {
+          const currentId = await currentAccountId()
+          const app = await currentSettings()
+          const targetId = currentId ?? app.accounts[0]?.id
+          if (!targetId) return
+          const account = app.accounts.find((a) => a.id === targetId)
+          if (!account) return
+          await schedulerFor(account.id, account.email).runNow()
+        })()
+      },
+      onQuit: () => {
+        isQuitting = true
+        app.quit()
+      },
+    })
+
+    mainWindow = createMainWindow(
+      validatedState,
+      (state) => {
+        void saveSettings({ windowState: state }).catch((err) => {
+          logger.log({
+            level: 'warn',
+            message: `Failed to save window state: ${err instanceof Error ? err.message : String(err)}`,
+          })
         })
-      })
+      },
+      { startHidden: cli.hidden },
+    )
+
+    mainWindow.on('close', (event) => {
+      if (!isQuitting) {
+        event.preventDefault()
+        mainWindow?.hide()
+      }
     })
 
     // Fill in the file counts so the window shows the real trees before

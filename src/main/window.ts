@@ -11,6 +11,12 @@ import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
 import type { WindowState } from './windowState'
 
+/** Options when initializing the main window. */
+export interface MainWindowOptions {
+  /** Whether the window should remain hidden until explicitly shown. */
+  startHidden?: boolean
+}
+
 /** Where the preload script lives, in development and in a build. */
 function preloadPath(): string {
   // The preload script is CommonJS, because a sandboxed preload cannot be
@@ -36,11 +42,26 @@ export function appIconPath(): string {
 }
 
 /**
+ * Show and focus the main window, restoring or maximizing as needed.
+ */
+export function showMainWindow(window: BrowserWindow, initialState?: WindowState): void {
+  if (window.isMinimized()) {
+    window.restore()
+  }
+  if (initialState?.isMaximized && !window.isMaximized()) {
+    window.maximize()
+  }
+  window.show()
+  window.focus()
+}
+
+/**
  * Create the app's window.
  */
 export function createMainWindow(
   initialState?: WindowState,
   onSaveState?: (state: WindowState) => void,
+  options?: MainWindowOptions,
 ): BrowserWindow {
   nativeTheme.themeSource = 'system'
 
@@ -147,10 +168,12 @@ export function createMainWindow(
 
   window.once('ready-to-show', () => {
     applyTheme()
-    if (initialState?.isMaximized) {
-      window.maximize()
+    if (!options?.startHidden) {
+      if (initialState?.isMaximized) {
+        window.maximize()
+      }
+      window.show()
     }
-    window.show()
   })
   window.on('closed', () => nativeTheme.removeListener('updated', applyTheme))
 
