@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import type { RunSummary } from '../../../main/ipc'
-import { relativeTime, formatLastRunCounts } from '../../format'
+import { relativeTime, formatLastRunCounts, formatFriendlyDate } from '../../format'
 
 /** The one-line Last run strip at the bottom of Overview. */
 interface LastRunProps {
@@ -21,7 +21,10 @@ export function LastRun({ summary, onViewAll }: LastRunProps): JSX.Element {
     )
   }
 
-  const when = relativeTime(summary.finishedAt)
+  const friendly = formatFriendlyDate(summary.finishedAt)
+  const relative = relativeTime(summary.finishedAt)
+  const when = friendly ? `${friendly} (${relative})` : relative
+
   const line = formatLastRunCounts({
     uploaded: summary.uploaded,
     updated: summary.updated,

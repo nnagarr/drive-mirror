@@ -1,41 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
-  summaryIsQuiet,
-  relativeTime,
-  pluralize,
-  countWith,
-  formatLastRunCounts,
   formatFriendlyDate,
+  formatLastRunCounts,
+  pluralize,
+  relativeTime,
+  countWith,
 } from '../src/renderer/format'
-
-describe('what the summary bar says about a run', () => {
-  const nothing = {
-    uploaded: 0,
-    updated: 0,
-    downloaded: 0,
-    trashed: 0,
-    errors: 0,
-    reports: [],
-  }
-
-  it('is quiet when a run changed nothing and had nothing to say', () => {
-    expect(summaryIsQuiet(nothing)).toBe(true)
-  })
-
-  it('is not quiet when a run reported something', () => {
-    expect(
-      summaryIsQuiet({
-        ...nothing,
-        reports: [{ code: 'anomaly', relPath: '', message: 'another sync was running' }],
-      }),
-    ).toBe(false)
-  })
-
-  it('is not quiet when a run changed something', () => {
-    expect(summaryIsQuiet({ ...nothing, uploaded: 1 })).toBe(false)
-    expect(summaryIsQuiet({ ...nothing, errors: 1 })).toBe(false)
-  })
-})
 
 describe('relativeTime', () => {
   const now = Date.parse('2026-10-24T12:00:00Z')
@@ -95,16 +65,21 @@ describe('countWith', () => {
 })
 
 describe('formatLastRunCounts', () => {
+  it('shows Everything up to date when there are no changes and no errors', () => {
+    expect(formatLastRunCounts({ uploaded: 0, updated: 0, downloaded: 0, trashed: 0, errors: 0 })).toBe('Everything up to date')
+  })
+
   it('shows non-zero counts plus errors', () => {
     expect(formatLastRunCounts({ uploaded: 16, updated: 1, downloaded: 0, trashed: 0, errors: 0 })).toBe('16 uploaded · 1 updated · 0 errors')
   })
 
-  it('omits zero counts except errors', () => {
-    expect(formatLastRunCounts({ uploaded: 0, updated: 0, downloaded: 0, trashed: 0, errors: 0 })).toBe('0 errors')
+  it('shows only errors when there are errors and no file changes', () => {
+    expect(formatLastRunCounts({ uploaded: 0, updated: 0, downloaded: 0, trashed: 0, errors: 1 })).toBe('1 error')
+    expect(formatLastRunCounts({ uploaded: 0, updated: 0, downloaded: 0, trashed: 0, errors: 2 })).toBe('2 errors')
   })
 
   it('includes moved to trash when non-zero', () => {
-    expect(formatLastRunCounts({ uploaded: 0, updated: 0, downloaded: 0, trashed: 2, errors: 1 })).toBe('2 moved to trash · 1 errors')
+    expect(formatLastRunCounts({ uploaded: 0, updated: 0, downloaded: 0, trashed: 2, errors: 1 })).toBe('2 moved to trash · 1 error')
   })
 })
 

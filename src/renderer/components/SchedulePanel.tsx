@@ -140,6 +140,11 @@ export function SchedulePanel({
         </button>
       </div>
 
+      {schedule.lastRunAt && (
+        <p className="field__hint" style={{ margin: '2px 0 0' }}>
+          Last run was at {formatFriendlyDate(schedule.lastRunAt)}.
+        </p>
+      )}
       {schedule.nextRunAt && (
         <p className="field__hint" style={{ margin: '2px 0 0' }}>
           Next run is scheduled for {formatFriendlyDate(schedule.nextRunAt)}.

@@ -54,12 +54,19 @@ export interface RunCounts {
 }
 
 export function formatLastRunCounts(c: RunCounts): string {
+  const hasChanges = c.uploaded > 0 || c.updated > 0 || c.downloaded > 0 || c.trashed > 0
+  if (!hasChanges && c.errors === 0) {
+    return 'Everything up to date'
+  }
+
   const parts: string[] = []
   if (c.uploaded > 0) parts.push(`${c.uploaded} uploaded`)
   if (c.updated > 0) parts.push(`${c.updated} updated`)
   if (c.downloaded > 0) parts.push(`${c.downloaded} downloaded`)
   if (c.trashed > 0) parts.push(`${c.trashed} moved to trash`)
-  parts.push(`${c.errors} errors`)
+  if (hasChanges || c.errors > 0) {
+    parts.push(`${c.errors} ${pluralize(c.errors, 'error')}`)
+  }
   return parts.join(' · ')
 }
 
