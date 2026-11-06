@@ -28,7 +28,7 @@ const DAY_MS = 24 * HOUR_MS
  * the machine had been off.
  *
  * The shapes that name a time of day - daily, weekly - are anchored on the
- **wall clock**, because that is what they mean: 02:00 is 02:00 whether the
+ * **wall clock**, because that is what they mean: 02:00 is 02:00 whether the
  * app was open or not.
  */
 export function nextFireAt(
@@ -104,6 +104,10 @@ export function intervalMs(shape: ScheduleShape): number {
  *
  * A run that has never happened counts as missed: the app has files to
  * copy and has not copied them.
+ *
+ * Wall-clock schedules (daily and weekly) check whether the most recent
+ * slot occurred after the last run, so sleep/hibernate states under 24 hours
+ * are correctly caught.
  */
 export function isRunMissed(
   shape: ScheduleShape,
@@ -113,7 +117,28 @@ export function isRunMissed(
   if (!lastRunAt) return true
   const last = Date.parse(lastRunAt)
   if (Number.isNaN(last)) return true
-  return now.getTime() - last > intervalMs(shape)
+
+  switch (shape.kind) {
+    case 'every-hours':
+    case 'every-days':
+      return now.getTime() - last >= intervalMs(shape)
+    case 'daily': {
+      const slot = atTimeOfDay(now, shape.at)
+      if (slot.getTime() > now.getTime()) {
+        slot.setDate(slot.getDate() - 1)
+      }
+      return last < slot.getTime()
+    }
+    case 'weekly': {
+      const slot = atTimeOfDay(now, shape.at)
+      const dayDiff = (slot.getDay() - shape.day + 7) % 7
+      slot.setDate(slot.getDate() - dayDiff)
+      if (slot.getTime() > now.getTime()) {
+        slot.setDate(slot.getDate() - 7)
+      }
+      return last < slot.getTime()
+    }
+  }
 }
 
 /** Whether a shape is one the app can actually run. */

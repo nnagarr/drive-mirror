@@ -112,6 +112,28 @@ describe('the schedule', () => {
     expect(isRunMissed(shape, now.toISOString(), now)).toBe(false)
   })
 
+  it('detects a missed daily run even if sleep was under 24 hours', () => {
+    const shape = { kind: 'daily', at: '02:00' } as const
+    const lastRunAt = new Date('2026-03-01T23:30:00').toISOString()
+    const nowAfter = new Date('2026-03-02T07:30:00')
+    const nowBefore = new Date('2026-03-02T01:30:00')
+
+    expect(isRunMissed(shape, lastRunAt, nowAfter)).toBe(true)
+    expect(isRunMissed(shape, lastRunAt, nowBefore)).toBe(false)
+  })
+
+  it('detects a missed weekly run', () => {
+    const shape = { kind: 'weekly', day: 3, at: '03:00' } as const // Wednesday 03:00
+    // 2026-03-03 is Tuesday (day 2)
+    const lastRunAt = new Date('2026-03-03T12:00:00').toISOString()
+    // 2026-03-04 is Wednesday (day 3)
+    const nowAfter = new Date('2026-03-04T10:00:00')
+    const nowBefore = new Date('2026-03-04T02:00:00')
+
+    expect(isRunMissed(shape, lastRunAt, nowAfter)).toBe(true)
+    expect(isRunMissed(shape, lastRunAt, nowBefore)).toBe(false)
+  })
+
   it('rejects a shape it cannot run', () => {
     expect(isValidShape({ kind: 'every-hours', everyHours: 0 })).toBe(false)
     expect(isValidShape({ kind: 'every-hours', everyHours: 24 })).toBe(false)
