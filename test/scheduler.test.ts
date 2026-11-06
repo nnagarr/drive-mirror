@@ -126,6 +126,20 @@ describe('the scheduler', () => {
     expect(h.calls.runs).toBe(1)
   })
 
+  it('notifies the user when catching up on a missed run', async () => {
+    const h = harness({
+      shape: { kind: 'every-hours', everyHours: 6 },
+      lastRunAt: new Date('2026-03-01T00:00:00').toISOString(),
+      now: new Date('2026-03-01T20:00:00'),
+    })
+    const s = createScheduler(h.deps)
+
+    await s.start()
+
+    expect(h.calls.runs).toBe(1)
+    expect(h.calls.notifications).toContain('Catching up on missed scheduled sync')
+  })
+
   it('does not run again when the last run was recent', async () => {
     const h = harness({
       shape: { kind: 'every-hours', everyHours: 6 },

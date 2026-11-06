@@ -213,8 +213,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // A run that was missed - the machine was off, or the user was not
       // signed in - happens once, now.
       if (catchUpIsDue()) {
-        // The run arms the timer itself: with the next slot, or with a
-        // retry of the missed one.
+        deps.notify('Drive Mirror', 'Catching up on missed scheduled sync')
         await runNow()
       } else {
         arm()
@@ -258,6 +257,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const schedule = await refresh()
     if (!schedule.enabled) return
     if (catchUpIsDue()) {
+      deps.notify('Drive Mirror', 'Catching up on missed scheduled sync')
       await runNow()
       return
     }

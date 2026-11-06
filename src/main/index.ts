@@ -73,7 +73,8 @@ function emit(event: AppEvent): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(EVENT_CHANNEL, event)
   }
-  if (!mainWindow && (event.type === 'notice' || event.type === 'error' || event.type === 'guard')) {
+  const isHidden = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()
+  if (isHidden && (event.type === 'notice' || event.type === 'error' || event.type === 'guard')) {
     // There is no window to show this in, so it waits for the next time
     // the app is opened - and the user is told now.
     void rememberNotice(event.message)
@@ -537,8 +538,13 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
       onResume: (fn) => {
-        powerMonitor.on('resume', fn)
-        return () => powerMonitor.off('resume', fn)
+        const onResume = (): void => fn()
+        powerMonitor.on('resume', onResume)
+        powerMonitor.on('unlock-screen', onResume)
+        return () => {
+          powerMonitor.off('resume', onResume)
+          powerMonitor.off('unlock-screen', onResume)
+        }
       },
       notify: (title, body) => {
         if (Notification.isSupported()) {
