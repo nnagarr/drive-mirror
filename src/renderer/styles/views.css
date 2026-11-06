@@ -142,7 +142,7 @@
 
 .folder-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 110px 100px 80px 140px;
+  grid-template-columns: minmax(0, 1fr) 110px 175px 75px auto;
   align-items: center;
   gap: 14px;
   padding: 10px 14px;
@@ -238,6 +238,7 @@
   justify-content: flex-end;
   gap: 6px;
   white-space: nowrap;
+  min-width: 170px;
 }
 
 /* --- Last Run Strip --- */
