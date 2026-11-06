@@ -3,17 +3,18 @@ import { parseCli } from '../src/main/cli'
 
 describe('the command line', () => {
   it('is not a scheduled run by default', () => {
-    expect(parseCli([])).toEqual({ syncOnce: false, accountId: null })
+    expect(parseCli([])).toEqual({ syncOnce: false, accountId: null, hidden: false })
   })
 
   it('reads a scheduled run', () => {
-    expect(parseCli(['--sync-once'])).toEqual({ syncOnce: true, accountId: null })
+    expect(parseCli(['--sync-once'])).toEqual({ syncOnce: true, accountId: null, hidden: false })
   })
 
   it('reads the account to run', () => {
     expect(parseCli(['--sync-once', '--account', 'acc_7f3a2b'])).toEqual({
       syncOnce: true,
       accountId: 'acc_7f3a2b',
+      hidden: false,
     })
   })
 
@@ -21,6 +22,7 @@ describe('the command line', () => {
     expect(parseCli(['--sync-once', '--account'])).toEqual({
       syncOnce: true,
       accountId: null,
+      hidden: false,
     })
   })
 
@@ -28,6 +30,7 @@ describe('the command line', () => {
     expect(parseCli(['--sync-once', '--account', '--other'])).toEqual({
       syncOnce: true,
       accountId: null,
+      hidden: false,
     })
   })
 
@@ -35,6 +38,15 @@ describe('the command line', () => {
     expect(parseCli(['--account', 'acc_7f3a2b', '--sync-once'])).toEqual({
       syncOnce: true,
       accountId: 'acc_7f3a2b',
+      hidden: false,
+    })
+  })
+
+  it('recognizes the --hidden flag', () => {
+    expect(parseCli(['--hidden'])).toEqual({
+      syncOnce: false,
+      accountId: null,
+      hidden: true,
     })
   })
 })

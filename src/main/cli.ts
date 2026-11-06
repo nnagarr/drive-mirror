@@ -4,6 +4,9 @@
  * The app is launched two ways: by the user, with a window, and by a
  * Windows task, which wants one sync and no window. The second is told
  * which account to sync with `--account`.
+ *
+ * It also supports `--hidden` when launched on Windows startup to stay
+ * silent in the system tray.
  */
 
 export interface CliOptions {
@@ -11,6 +14,8 @@ export interface CliOptions {
   syncOnce: boolean
   /** Which account to run, or null for all of them. */
   accountId: string | null
+  /** Whether the window should start hidden in the tray. */
+  hidden: boolean
 }
 
 /**
@@ -22,10 +27,15 @@ export interface CliOptions {
 export function parseCli(argv: string[]): CliOptions {
   let syncOnce = false
   let accountId: string | null = null
+  let hidden = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--sync-once') {
       syncOnce = true
+      continue
+    }
+    if (arg === '--hidden') {
+      hidden = true
       continue
     }
     if (arg === '--account') {
@@ -37,5 +47,5 @@ export function parseCli(argv: string[]): CliOptions {
       continue
     }
   }
-  return { syncOnce, accountId }
+  return { syncOnce, accountId, hidden }
 }
