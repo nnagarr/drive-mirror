@@ -752,21 +752,10 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       }
       for (const account of accounts) {
         if (named && account.id !== named) continue
-        const settings = await accountSettingsFor(account.id)
-        if (!settings.schedule.enabled) {
-          // The schedule was switched off, or was never turned on. The
-          // task has to go, or it will keep firing.
-          await unregisterTask(account.email)
-          continue
-        }
-        if (!named && settings.schedule.mechanism !== 'windows-task') {
-          // Without an account named, this is the old task firing, and
-          // the old task belonged to the accounts that use a Windows task.
-          // The others run from the app's own timer.
-          continue
-        }
+        await unregisterTask(account.email).catch(() => {})
         await schedulerFor(account.id, account.email).runNow()
       }
+      await unregisterLegacyTask().catch(() => {})
       app.quit()
       return
     }
@@ -834,6 +823,22 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
     // Older versions of the app kept a copy of every file it replaced.
     // It does not any more, so the folder goes.
     await clearSupersededStore()
+
+    // Clean up any legacy or previously registered Windows Scheduled Tasks
+    await unregisterLegacyTask().catch((err) => {
+      logger.log({
+        level: 'warn',
+        message: `Failed to unregister legacy Windows task: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    })
+    for (const account of appSettings.accounts) {
+      await unregisterTask(account.email).catch((err) => {
+        logger.log({
+          level: 'warn',
+          message: `Failed to unregister Windows task for ${account.email}: ${err instanceof Error ? err.message : String(err)}`,
+        })
+      })
+    }
 
     // The schedules start last, so a run that was missed while the app
     // was closed happens after the window is up and can say so.

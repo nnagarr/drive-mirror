@@ -60,18 +60,18 @@ describe('the system tray', () => {
     )
 
     expect(menuTemplate).toHaveLength(4)
-    expect(menuTemplate[0].label).toBe('Open Drive Mirror')
-    expect(menuTemplate[1].label).toBe('Sync now')
-    expect(menuTemplate[2].type).toBe('separator')
-    expect(menuTemplate[3].label).toBe('Quit Drive Mirror')
+    expect(menuTemplate[0]?.label).toBe('Open Drive Mirror')
+    expect(menuTemplate[1]?.label).toBe('Sync now')
+    expect(menuTemplate[2]?.type).toBe('separator')
+    expect(menuTemplate[3]?.label).toBe('Quit Drive Mirror')
 
-    menuTemplate[0].click?.()
+    menuTemplate[0]?.click?.()
     expect(onOpen).toHaveBeenCalledOnce()
 
-    menuTemplate[1].click?.()
+    menuTemplate[1]?.click?.()
     expect(onSyncNow).toHaveBeenCalledOnce()
 
-    menuTemplate[3].click?.()
+    menuTemplate[3]?.click?.()
     expect(onQuit).toHaveBeenCalledOnce()
   })
 
@@ -103,10 +103,10 @@ describe('the system tray', () => {
     expect(listeners['click']).toBeDefined()
     expect(listeners['double-click']).toBeDefined()
 
-    listeners['click']()
+    listeners['click']?.()
     expect(onOpen).toHaveBeenCalledTimes(1)
 
-    listeners['double-click']()
+    listeners['double-click']?.()
     expect(onOpen).toHaveBeenCalledTimes(2)
   })
 })

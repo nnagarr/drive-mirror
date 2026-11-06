@@ -7,10 +7,9 @@ import type { AccountSettings } from './accountSettings'
 /**
  * The timer that runs the syncs on their own.
  *
- * There is **one** schedule and **one** way to run it. The in-app timer
- * fires while the app is open; a Windows task fires when it is not. Only
- * one of the two is ever active, because two would mean two syncs per
- * slot.
+ * There is **one** schedule and it runs while the application is active
+ * (including when minimized to the system tray). Any legacy Windows task
+ * from older versions is cleanly unregistered.
  *
  * A slot the machine slept through is not lost. The resume hook checks the
  * clock, and a run that was missed happens once, when the app next wakes.
@@ -20,7 +19,7 @@ import type { AccountSettings } from './accountSettings'
 export interface SchedulerDeps {
   /** The account this scheduler runs. */
   accountId: string
-  /** The address of that account, which its Windows task is named after. */
+  /** The address of that account, which its Windows task was named after. */
   accountEmail: string
   /** The account's settings as they are now. */
   settings(): Promise<AccountSettings>
@@ -30,12 +29,12 @@ export interface SchedulerDeps {
   runSync(): Promise<RunSummary>
   /** The current time. */
   now(): Date
-  /** Create the Windows task. */
-  registerTask(shape: ScheduleShape, exePath: string, nextRunAt: Date): Promise<void>
+  /** Create the Windows task (legacy). */
+  registerTask?(shape: ScheduleShape, exePath: string, nextRunAt: Date): Promise<void>
   /** Remove the Windows task. */
   unregisterTask(): Promise<void>
-  /** Whether the Windows task is there. */
-  taskExists(): Promise<boolean>
+  /** Whether the Windows task is there (legacy). */
+  taskExists?(): Promise<boolean>
   /** Where the app's executable is. */
   exePath(): string
   /** Arm a timer. */
@@ -50,15 +49,13 @@ export interface SchedulerDeps {
 
 /** The scheduler. */
 export interface Scheduler {
-  /** Start it: catch up on a missed run, and arm the timer. */
+  /** Start it: catch up on a missed run, clean up legacy task, and arm the timer. */
   start(): Promise<void>
   /**
    * Take a new schedule into account.
    *
    * Called when the user changes the schedule, so the app does not need
-   * restarting for the change to mean anything. The Windows task is
-   * removed when the schedule is switched off or the mechanism moves away
-   * from it, because a task that outlives its schedule keeps firing.
+   * restarting for the change to mean anything.
    */
   applySchedule(): Promise<void>
   /** Stop it. */
@@ -73,7 +70,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   let timer: unknown = null
   let inFlight: Promise<void> | null = null
   let shape: ScheduleShape | null = null
-  let mechanism: ScheduleConfig['mechanism'] = 'in-app'
   let lastRunAt: string | null = null
   let nextRun: Date | null = null
   /**
@@ -131,7 +127,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // The slot is retried as soon as the lock is free, rather than
         // waiting a whole period for the next one. The retry waits for
         // the lock in its turn, so the work is not lost.
-        if (mechanism === 'in-app') arm(dueAt ?? deps.now())
+        arm(dueAt ?? deps.now())
         return
       }
       lastRunAt = deps.now().toISOString()
@@ -144,10 +140,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         err instanceof Error ? err.message : String(err),
       )
     }
-    // Only the in-app timer is armed here. With the Windows task as the
-    // mechanism, the app's own timer must stay off, or there would be two
-    // syncs per slot.
-    if (mechanism === 'in-app') arm()
+    arm()
   }
 
   function runNow(): Promise<void> {
@@ -181,7 +174,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function refresh(): Promise<ScheduleConfig> {
     const settings = await deps.settings()
     shape = settings.schedule.shape
-    mechanism = settings.schedule.mechanism
     lastRunAt = settings.schedule.lastRunAt
     return settings.schedule
   }
@@ -216,19 +208,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         return
       }
 
-      if (schedule.mechanism === 'windows-task') {
-        const next = nextFireAt(shape!, deps.now(), lastRunAt)
-        if (!(await deps.taskExists())) {
-          await deps.registerTask(
-            shape!,
-            deps.exePath(),
-            next,
-          )
-        }
-        await persist({ nextRunAt: next.toISOString() })
-      } else {
-        await removeTask()
-      }
+      await removeTask()
 
       // A run that was missed - the machine was off, or the user was not
       // signed in - happens once, now.
@@ -236,7 +216,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // The run arms the timer itself: with the next slot, or with a
         // retry of the missed one.
         await runNow()
-      } else if (schedule.mechanism === 'in-app') {
+      } else {
         arm()
       }
 
@@ -253,21 +233,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await removeTask()
         stopTimer()
         await persist({ nextRunAt: null })
-        return
-      }
-
-      if (schedule.mechanism === 'windows-task') {
-        // The app's own timer must not also run.
-        stopTimer()
-        const next = nextFireAt(shape!, deps.now(), lastRunAt)
-        if (!(await deps.taskExists())) {
-          await deps.registerTask(
-            shape!,
-            deps.exePath(),
-            next,
-          )
-        }
-        await persist({ nextRunAt: next.toISOString() })
         return
       }
 
@@ -296,8 +261,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       await runNow()
       return
     }
-    if (schedule.mechanism === 'in-app') {
-      arm()
-    }
+    arm()
   }
 }

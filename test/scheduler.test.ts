@@ -32,6 +32,7 @@ function harness(
     runs: 0,
     armed: 0,
     registered: 0,
+    unregistered: 0,
     notifications: [] as string[],
   }
 
@@ -63,7 +64,9 @@ function harness(
     registerTask: async (): Promise<void> => {
       calls.registered += 1
     },
-    unregisterTask: async (): Promise<void> => {},
+    unregisterTask: async (): Promise<void> => {
+      calls.unregistered += 1
+    },
     taskExists: async (): Promise<boolean> => options.taskExists ?? true,
     exePath: (): string => 'C:\\app\\Drive Mirror.exe',
     setTimer: (_fn: () => void, _ms: number): unknown => {
@@ -164,31 +167,15 @@ describe('the scheduler', () => {
     expect(h.calls.armed).toBe(1)
   })
 
-  it('registers the Windows task when it is missing', async () => {
-    const h = harness({ mechanism: 'windows-task', taskExists: false })
-    const s = createScheduler(h.deps)
-
-    await s.start()
-
-    expect(h.calls.registered).toBe(1)
-  })
-
-  it('leaves the Windows task alone when it is already there', async () => {
+  it('removes any existing Windows task and always arms in-app timer on start', async () => {
     const h = harness({ mechanism: 'windows-task', taskExists: true })
     const s = createScheduler(h.deps)
 
     await s.start()
 
+    expect(h.calls.unregistered).toBe(1)
     expect(h.calls.registered).toBe(0)
-  })
-
-  it('does not arm a timer when the Windows task runs the app', async () => {
-    const h = harness({ mechanism: 'windows-task' })
-    const s = createScheduler(h.deps)
-
-    await s.start()
-
-    expect(h.calls.armed).toBe(0)
+    expect(h.calls.armed).toBe(1)
   })
 
   it('does nothing when the schedule is switched off', async () => {
@@ -224,8 +211,9 @@ describe('the scheduler', () => {
 
     expect(h.settings.schedule.lastRunAt).toBe(now.toISOString())
   })
-  it('persists nextRunAt for windows-task mechanism', async () => {
-    const h = harness({ mechanism: 'windows-task' })
+
+  it('persists nextRunAt when the in-app timer is armed', async () => {
+    const h = harness({ mechanism: 'in-app' })
     const s = createScheduler(h.deps)
 
     await s.start()

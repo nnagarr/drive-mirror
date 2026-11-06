@@ -121,25 +121,6 @@ export function SchedulePanel({
         </>
       )}
 
-      <div className="field">
-        <label className="field__label">How it runs</label>
-        <select
-          className="field__input"
-          value={schedule.mechanism}
-          onChange={(event) =>
-            void save({ mechanism: event.target.value as ScheduleConfig['mechanism'] })
-          }
-        >
-          <option value="in-app">While the app is open</option>
-          <option value="windows-task">Even when the app is closed</option>
-        </select>
-        <span className="field__hint">
-          {schedule.mechanism === 'windows-task'
-            ? 'A task is registered with Windows. It runs only while you are signed in, because the app’s credentials are encrypted with your Windows account.'
-            : 'The app syncs on a timer while it is open. Close it and nothing runs.'}
-        </span>
-      </div>
-
       <div className="schedule-panel__actions">
         <label className="field--inline">
           <input
