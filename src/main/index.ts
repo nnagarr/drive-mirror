@@ -826,6 +826,9 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
     // its history goes, and the copy of the bytes it replaced stays.
     if (currentId) await runner.pruneRemovedMirrors(currentId)
 
+    // Clean up any orphaned sync lock from a previous session
+    await releaseSyncLock(join(appDataDir(), 'sync.lock')).catch(() => undefined)
+
     // Older versions of the app kept a copy of every file it replaced.
     // It does not any more, so the folder goes.
     await clearSupersededStore()

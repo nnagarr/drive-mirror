@@ -1327,7 +1327,23 @@ export async function acquireSyncLock(lockPath: string, now: Date): Promise<bool
   // A lock that is exactly this old is taken over. With a schedule of
   // every six hours, a lock left behind by a crashed run would
   // otherwise block the very next slot.
-  if (now.getTime() - info.mtimeMs < LOCK_STALE_MS) return false
+  // Check if the lock was held by a process that is no longer running.
+  const content = await readFile(lockPath, 'utf8').catch(() => '')
+  const pid = parseInt(content.trim(), 10)
+  let processAlive = false
+  if (Number.isInteger(pid) && pid > 0) {
+    try {
+      process.kill(pid, 0)
+      processAlive = true
+    } catch {
+      processAlive = false
+    }
+  }
+
+  const isDeadProcess = Number.isInteger(pid) && pid > 0 && !processAlive
+  const isTimeStale = now.getTime() - info.mtimeMs >= LOCK_STALE_MS
+
+  if (!isDeadProcess && !isTimeStale) return false
 
   // The lock is stale: the run that took it is long gone.
   await rm(lockPath, { force: true })
@@ -1347,6 +1363,7 @@ export async function releaseSyncLock(lockPath: string): Promise<void> {
 async function createLockFile(lockPath: string): Promise<boolean> {
   try {
     const handle = await open(lockPath, 'wx')
+    await handle.writeFile(String(process.pid))
     await handle.close()
     return true
   } catch {

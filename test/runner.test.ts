@@ -754,6 +754,14 @@ describe('the sync runner', () => {
     await releaseSyncLock(box.lockPath)
   })
 
+  it('takes over a lock whose process is dead', async () => {
+    const box = await harness()
+    await writeFile(box.lockPath, '99999999')
+
+    expect(await acquireSyncLock(box.lockPath, new Date())).toBe(true)
+    await releaseSyncLock(box.lockPath)
+  })
+
   it('does not run while another process holds the lock', async () => {
     const box = await harness()
     await writeFile(join(box.root, 'a.psd'), 'local bytes')
