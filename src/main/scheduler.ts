@@ -80,6 +80,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
    */
   let dueAt: Date | null = null
   let stopResume: (() => void) | null = null
+  let wakeInFlight: Promise<void> | null = null
 
   /**
    * Arm the timer for the next slot.
@@ -253,14 +254,24 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   /** The machine woke up. A slot that went by while it slept is not lost. */
-  async function onWake(): Promise<void> {
-    const schedule = await refresh()
-    if (!schedule.enabled) return
-    if (catchUpIsDue()) {
-      deps.notify('Drive Mirror', 'Catching up on missed scheduled sync')
-      await runNow()
-      return
-    }
-    arm()
+  function onWake(): Promise<void> {
+    if (wakeInFlight) return wakeInFlight
+    wakeInFlight = (async () => {
+      try {
+        if (inFlight) return
+        const schedule = await refresh()
+        if (!schedule.enabled) return
+        if (inFlight) return
+        if (catchUpIsDue()) {
+          deps.notify('Drive Mirror', 'Catching up on missed scheduled sync')
+          await runNow()
+          return
+        }
+        arm()
+      } finally {
+        wakeInFlight = null
+      }
+    })()
+    return wakeInFlight
   }
 }

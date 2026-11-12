@@ -234,4 +234,87 @@ describe('the scheduler', () => {
 
     expect(h.settings.schedule.nextRunAt).not.toBeNull()
   })
+
+  it('notifies only once when waking up multiple times to catch up', async () => {
+    let wake: (() => void) | null = null
+    let currentTime = new Date('2026-03-01T05:00:00')
+    const h = harness({
+      shape: { kind: 'every-hours', everyHours: 6 },
+      lastRunAt: new Date('2026-03-01T00:00:00').toISOString(),
+    })
+    h.deps.now = () => currentTime
+    h.deps.onResume = (fn) => {
+      wake = fn
+      return () => {
+        wake = null
+      }
+    }
+    const s = createScheduler(h.deps)
+    await s.start()
+    expect(h.calls.notifications).toHaveLength(0)
+
+    // Machine slept past 06:00 slot, now wakes at 10:00
+    currentTime = new Date('2026-03-01T10:00:00')
+    const triggerWake = wake as (() => void) | null
+    triggerWake?.()
+    triggerWake?.()
+    triggerWake?.()
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(h.calls.notifications.filter((n) => n === 'Catching up on missed scheduled sync')).toHaveLength(1)
+  })
+
+  it('does not send catch-up notification if a sync is already in flight when waking', async () => {
+    let wake: (() => void) | null = null
+    let releaseSync: (() => void) | null = null
+    const currentTime = new Date('2026-03-01T10:00:00')
+    const h = harness({
+      shape: { kind: 'every-hours', everyHours: 6 },
+      lastRunAt: new Date('2026-03-01T00:00:00').toISOString(),
+      now: currentTime,
+    })
+    h.deps.runSync = () => {
+      h.calls.runs += 1
+      return new Promise((resolve) => {
+        releaseSync = () => {
+          resolve({
+            startedAt: '',
+            finishedAt: '',
+            uploaded: 0,
+            updated: 0,
+            downloaded: 0,
+            trashed: 0,
+            errors: 0,
+            mirrors: [],
+            changed: [],
+            reports: [],
+          })
+        }
+      })
+    }
+    h.deps.onResume = (fn) => {
+      wake = fn
+      return () => {
+        wake = null
+      }
+    }
+    const s = createScheduler(h.deps)
+
+    // Start a sync manually first
+    const running = s.runNow()
+    expect(h.calls.runs).toBe(1)
+
+    // Wake arrives while running is in flight
+    const triggerWake = wake as (() => void) | null
+    triggerWake?.()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    // Should not notify because sync is already in flight
+    expect(h.calls.notifications).toHaveLength(0)
+
+    const release = releaseSync as (() => void) | null
+    release?.()
+    await running
+  })
 })

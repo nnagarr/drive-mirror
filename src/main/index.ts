@@ -39,8 +39,9 @@ import { validateWindowState } from './windowState'
 import { createRunner, acquireSyncLock, releaseSyncLock } from './runner'
 import type { AccountRuntime } from './runner'
 import { createScheduler } from './scheduler'
-
 import type { Scheduler } from './scheduler'
+import { createWakeMonitor } from './wakeMonitor'
+import type { WakeMonitor } from './wakeMonitor'
 import { setPendingNotice } from './notice'
 import { registerTask, taskExists, unregisterLegacyTask, unregisterTask } from './taskScheduler'
 
@@ -54,8 +55,24 @@ const EVENT_CHANNEL = 'drive-mirror:event'
 
 let mainWindow: BrowserWindow | null = null
 let appTray: TrayLike | null = null
+let wakeMonitor: WakeMonitor | null = null
 let isQuitting = false
 const logger = createLogger(join(appDataDir(), 'logs'))
+
+const recentNotifications = new Map<string, number>()
+
+/** Show a notification, deduplicating identical messages within 5 seconds. */
+function showNotification(title: string, body: string): void {
+  if (!Notification.isSupported()) return
+  const key = `${title}:::${body}`
+  const now = Date.now()
+  const last = recentNotifications.get(key)
+  if (last && now - last < 5000) {
+    return
+  }
+  recentNotifications.set(key, now)
+  new Notification({ title, body }).show()
+}
 
 /** Send an event to the interface. */
 function emit(event: AppEvent): void {
@@ -78,9 +95,7 @@ function emit(event: AppEvent): void {
     // There is no window to show this in, so it waits for the next time
     // the app is opened - and the user is told now.
     void rememberNotice(event.message)
-    if (Notification.isSupported()) {
-      new Notification({ title: 'Drive Mirror', body: event.message }).show()
-    }
+    showNotification('Drive Mirror', event.message)
   }
 }
 
@@ -436,6 +451,8 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       isQuitting = true
     })
     app.on('will-quit', () => {
+      wakeMonitor?.dispose()
+      wakeMonitor = null
       appTray?.destroy()
       appTray = null
     })
@@ -515,6 +532,7 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
      * their own times.
      */
     const schedulers = new Map<string, Scheduler>()
+    wakeMonitor = createWakeMonitor({ powerMonitor })
 
     /** The scheduler for an account, made the first time it is needed. */
     function schedulerFor(id: string, email: string): Scheduler {
@@ -537,20 +555,8 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       exePath: () => app.getPath('exe'),
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
-      onResume: (fn) => {
-        const onResume = (): void => fn()
-        powerMonitor.on('resume', onResume)
-        powerMonitor.on('unlock-screen', onResume)
-        return () => {
-          powerMonitor.off('resume', onResume)
-          powerMonitor.off('unlock-screen', onResume)
-        }
-      },
-      notify: (title, body) => {
-        if (Notification.isSupported()) {
-          new Notification({ title, body }).show()
-        }
-      },
+      onResume: (fn) => (wakeMonitor ? wakeMonitor.onResume(fn) : () => {}),
+      notify: (title, body) => showNotification(title, body),
       })
       schedulers.set(id, scheduler)
       return scheduler
