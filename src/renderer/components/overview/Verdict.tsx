@@ -26,7 +26,6 @@ export function Verdict({ verdict, onPrimary, onSecondary, onOverride }: Verdict
       </div>
       <div className="verdict__actions">
         <button type="button" className="button button--primary" onClick={onPrimary}>
-          {busy && <span className="spinner" aria-hidden="true" />}
           {verdict.action}
         </button>
         {onSecondary && (

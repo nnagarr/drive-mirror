@@ -109,6 +109,7 @@
 /* --- Sidebar --- */
 
 .sidebar {
+  position: relative;
   width: 232px;
   flex: none;
   border-right: 1px solid var(--line);
@@ -123,24 +124,27 @@
   transition: width 160ms ease;
 }
 
+/* The collapse handle rides on the sidebar's edge, halfway down. */
 .sidebar__toggle {
-  align-self: flex-end;
+  position: absolute;
+  right: -13px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 26px;
   height: 26px;
   padding: 0;
   font-size: 14px;
   line-height: 1;
-  border-radius: 6px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  z-index: 10;
 }
 
 .sidebar--collapsed {
   width: 44px;
   padding: 14px 6px 12px;
-  overflow: hidden;
-}
-
-.sidebar--collapsed .sidebar__toggle {
-  align-self: center;
 }
 
 /* --- Account Switcher --- */

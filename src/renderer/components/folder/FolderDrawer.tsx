@@ -151,7 +151,6 @@ export function FolderDrawer({
                 {...disabledWhileSyncing(racingDisabled)}
                 onClick={() => void onSync(mirror.name)}
               >
-                {isSyncing && <span className="spinner" aria-hidden="true" />}
                 {isSyncing ? 'Syncing…' : 'Sync this folder'}
               </button>
             ) : (

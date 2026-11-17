@@ -175,26 +175,23 @@ describe('UpdateManager', () => {
     expect(backend.checkForUpdates).not.toHaveBeenCalled()
   })
 
-  it('calls quitAndInstall on installUpdate only when downloaded', async () => {
+  it('calls quitAndInstall on installUpdate only when downloaded', () => {
     const backend = new MockUpdaterBackend()
     const manager = createUpdateManager({
       backend,
       currentVersion: '1.0.0',
       isPackaged: true,
-      installDelayMs: 0,
     })
 
     // Ignored when not downloaded
     manager.installUpdate()
     expect(backend.quitAndInstall).not.toHaveBeenCalled()
 
-    // Allowed when downloaded
+    // Allowed when downloaded. The app closes at once; the installer's
+    // own progress bar is what the user sees.
     backend.emit('update-downloaded', { version: '1.1.0' })
     manager.installUpdate()
-    // The installing state is what the interface shows while the update
-    // is being put in place.
     expect(manager.getStatus().status).toBe('installing')
-    await new Promise((resolve) => setTimeout(resolve, 10))
     expect(backend.quitAndInstall).toHaveBeenCalled()
   })
 

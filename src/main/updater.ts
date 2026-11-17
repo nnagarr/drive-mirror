@@ -56,8 +56,6 @@ export interface UpdateManagerDeps {
   currentVersion: string
   isPackaged?: boolean
   isAutoDownload?: () => boolean | Promise<boolean>
-  /** How long the installing state is on screen before the app closes. */
-  installDelayMs?: number
   log?: (message: string) => void
 }
 
@@ -254,16 +252,11 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
         deps.log?.('Cannot install update: no update has been downloaded')
         return
       }
-      // The installing state is what the interface shows between the
-      // click and the moment the app closes to take the update. The
-      // installer itself runs silently and starts the app again when it
-      // is done, so the user never sees a wizard.
+      // The app closes at once and the installer's own Windows progress
+      // bar takes over; it starts the app again when it is done. Nothing
+      // brief flashes inside the app first.
       setStatus({ status: 'installing', progress: 100, error: undefined })
-      // A short pause so the installing state is on screen before the
-      // window goes away.
-      setTimeout(() => {
-        deps.backend.quitAndInstall()
-      }, deps.installDelayMs ?? 1200)
+      deps.backend.quitAndInstall()
     },
 
     onChange(listener: (info: UpdateInfo) => void): () => void {

@@ -92,7 +92,7 @@ export function verdict(input: StatusInput): Verdict {
   if (state.running && state.phase !== 'waiting') {
     const subline = progress && progress.total > 0
       ? `${progress.mirror} · uploading ${progress.done} of ${progress.total} files`
-      : 'Backing up now.'
+      : 'Your folders are being copied to Drive.'
     return { kind: 'syncing', sentence: 'Backing up now.', subline, action: 'Syncing…', dot: 'sage', counts, files }
   }
   // 6. Waiting
