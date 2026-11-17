@@ -42,6 +42,7 @@ import { checkCountDrop, checkVolumeFingerprint, rebaseMirror } from '../core/gu
 import { exportInfoFor } from '../core/googleMime'
 import { scanLocal } from '../core/localScan'
 import { buildClaimIndex, planExportPaths } from '../core/claims'
+import { planDeletedFolders } from '../core/folderDiff'
 import { canon } from '../core/paths'
 import { diffMirror } from '../core/diff'
 import { executePlan, localDisplayName } from '../core/sync'
@@ -614,6 +615,36 @@ export function createRunner(deps: RunnerDeps): Runner {
     counts.trashed = result.trashed
     counts.errors = result.errors.length
     reports.push(...result.reports)
+
+    // --- Folders the user deleted locally -----------------------------
+    // The file rules trash each file, but a deleted local folder is not a
+    // file path, and its Drive folder would sit there empty forever. The
+    // Drive folders whose directory is gone from the disk — and whose
+    // absence the scan can vouch for — go to the trash as well. A rebase
+    // performs no destructive action, so it skips this too.
+    if (!(mirrorManifest.rebase?.pending ?? false)) {
+      const folderPlan = planDeletedFolders(drive.dirs, local)
+      for (const trash of folderPlan) {
+        try {
+          await account.client.trash(trash.driveFolderId)
+          counts.trashed += 1
+          changed.push({
+            mirror: config.name,
+            relPath: trash.relPath,
+            action: 'trash-folder',
+          })
+        } catch (err) {
+          counts.errors += 1
+          reports.push({
+            code: 'anomaly',
+            relPath: trash.relPath,
+            message: `the Drive folder could not be moved to the trash: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          })
+        }
+      }
+    }
 
     for (const step of plan.steps) {
       if (step.action) {
