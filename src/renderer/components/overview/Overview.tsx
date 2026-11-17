@@ -40,6 +40,8 @@ interface OverviewProps {
   onSignIn: () => void
   onAddFolder: () => void
   onPauseResume?: (name: string, enabled: boolean) => void
+  /** Approves a tripped guard for one folder and syncs it anyway. */
+  onOverride?: (name: string) => void
 }
 
 export function Overview({
@@ -59,6 +61,7 @@ export function Overview({
   onSignIn,
   onAddFolder,
   onPauseResume,
+  onOverride,
 }: OverviewProps): JSX.Element {
   const v = useMemo(
     () =>
@@ -130,7 +133,12 @@ export function Overview({
 
   return (
     <section className="overview">
-      <Verdict verdict={v} onPrimary={handlePrimary} onSecondary={handleSecondary} />
+      <Verdict
+        verdict={v}
+        onPrimary={handlePrimary}
+        onSecondary={handleSecondary}
+        onOverride={guard && guard.canOverride && onOverride ? () => onOverride(guard.mirror) : undefined}
+      />
 
       {mirrors.length > 0 && (
         <div className="overview__filters">

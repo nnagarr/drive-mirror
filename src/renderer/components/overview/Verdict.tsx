@@ -9,9 +9,11 @@ interface VerdictProps {
   onPrimary: () => void
   /** Fires the secondary "Sync now" when there is one (attention/error). */
   onSecondary?: () => void
+  /** Approves a tripped guard and syncs the folder anyway. */
+  onOverride?: () => void
 }
 
-export function Verdict({ verdict, onPrimary, onSecondary }: VerdictProps): JSX.Element {
+export function Verdict({ verdict, onPrimary, onSecondary, onOverride }: VerdictProps): JSX.Element {
   const dotClass = `verdict__dot verdict__dot--${verdict.dot}`
   return (
     <section className="verdict" aria-live="polite">
@@ -27,6 +29,11 @@ export function Verdict({ verdict, onPrimary, onSecondary }: VerdictProps): JSX.
         {onSecondary && (
           <button type="button" className="button button--sage" onClick={onSecondary}>
             Sync now
+          </button>
+        )}
+        {onOverride && (
+          <button type="button" className="button button--danger" onClick={onOverride}>
+            Sync anyway
           </button>
         )}
       </div>

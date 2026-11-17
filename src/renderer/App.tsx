@@ -275,6 +275,31 @@ export function App(): JSX.Element {
     [refresh],
   )
 
+  /**
+   * Approve a tripped guard for one folder and sync it anyway.
+   *
+   * The guard exists to stop a misread disk from deleting a mirror's
+   * worth of files on Drive, so the approval names exactly what will
+   * happen and asks for it. A folder that is not tripping a guard has
+   * no override to reach, so the button does not appear for it.
+   */
+  const overrideSync = useCallback(async (name: string) => {
+    setError(null)
+    const agreed = window.confirm(
+      `Sync ${name} anyway?\n\n` +
+        'The safety check found that a folder lost many of its files. ' +
+        'If that was you, the files that are gone locally will be moved ' +
+        'to the trash in your Drive too.',
+    )
+    if (!agreed) return
+    try {
+      const result = await window.driveMirror.overrideGuard(name)
+      setSummary(result)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The sync could not be started.')
+    }
+  }, [])
+
   const removeMirror = useCallback(
     async (name: string) => {
       const agreed = window.confirm(
@@ -412,6 +437,7 @@ export function App(): JSX.Element {
                 onSignIn={() => void connectAccount()}
                 onAddFolder={() => void addFolder()}
                 onPauseResume={(name, enabled) => void setEnabled(name, enabled)}
+                onOverride={(name) => void overrideSync(name)}
               />
             )}
             {view === 'activity' && (
