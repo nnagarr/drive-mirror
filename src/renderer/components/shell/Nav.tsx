@@ -11,7 +11,7 @@ interface NavProps {
 
 export function Nav({ view, hasUpdate, onSelect }: NavProps): JSX.Element {
   const items: { id: 'overview' | 'activity' | 'settings'; label: string }[] = [
-    { id: 'overview', label: 'Overview' },
+    { id: 'overview', label: 'Home' },
     { id: 'activity', label: 'Activity' },
     { id: 'settings', label: 'Settings' },
   ]

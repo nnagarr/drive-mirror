@@ -120,6 +120,27 @@
   overflow-y: auto;
   user-select: none;
   box-sizing: border-box;
+  transition: width 160ms ease;
+}
+
+.sidebar__toggle {
+  align-self: flex-end;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 6px;
+}
+
+.sidebar--collapsed {
+  width: 44px;
+  padding: 14px 6px 12px;
+  overflow: hidden;
+}
+
+.sidebar--collapsed .sidebar__toggle {
+  align-self: center;
 }
 
 /* --- Account Switcher --- */

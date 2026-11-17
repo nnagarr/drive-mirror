@@ -78,6 +78,7 @@ export function FolderRow({ mirror, onSync, onEdit, onPauseResume }: FolderRowPr
           }}
           disabled={isSyncing}
         >
+          {isSyncing && <span className="spinner" aria-hidden="true" />}
           {isSyncing ? 'Syncing…' : needsYou ? 'Review' : isPaused ? 'Resume' : 'Sync this folder'}
         </button>
         <button type="button" className="button button--quiet" onClick={() => void onEdit(mirror.name)}>

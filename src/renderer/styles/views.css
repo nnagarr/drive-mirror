@@ -18,35 +18,6 @@
   padding: 4px 0 6px;
 }
 
-.verdict__dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  margin-top: 8px;
-  flex-shrink: 0;
-}
-
-.verdict__dot--safe {
-  background: var(--safe);
-  box-shadow: 0 0 0 4px var(--safe-soft);
-}
-
-.verdict__dot--attention {
-  background: var(--attention);
-  box-shadow: 0 0 0 4px var(--attention-soft);
-}
-
-.verdict__dot--error {
-  background: var(--danger);
-  box-shadow: 0 0 0 4px var(--danger-soft);
-}
-
-.verdict__dot--syncing {
-  background: var(--sage);
-  box-shadow: 0 0 0 4px var(--sage-soft);
-  animation: pulse-dot 1.5s infinite;
-}
-
 .verdict__body {
   flex: 1;
   min-width: 0;

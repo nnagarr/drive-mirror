@@ -35,6 +35,32 @@
   cursor: not-allowed;
 }
 
+/* --- Spinner (something is running) --- */
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  vertical-align: middle;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.verdict__sentence .spinner {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .button--primary,
 .btn-primary {
   background: var(--primary);

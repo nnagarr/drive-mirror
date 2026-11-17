@@ -76,6 +76,20 @@ export function App(): JSX.Element {
   } | null>(null)
   /** Whether the onboarding checklist is open. */
   const [onboardingOpen, setOnboardingOpen] = useState(false)
+  /**
+   * Whether the sidebar is collapsed.
+   *
+   * The choice is remembered, so the app opens the way the user left it.
+   */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem('drive-mirror.sidebar-collapsed') === '1',
+  )
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((current) => {
+      localStorage.setItem('drive-mirror.sidebar-collapsed', current ? '0' : '1')
+      return !current
+    })
+  }, [])
   /** The app's icon, shown next to the title. */
   const [icon, setIcon] = useState('')
   /**
@@ -395,6 +409,8 @@ export function App(): JSX.Element {
           nextBackup={nextBackup}
           updateInfo={updateInfo}
           isSyncing={state?.running ?? false}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={toggleSidebar}
           onSwitch={(id) => void switchAccount(id)}
           onConnect={() => void connectAccount()}
           onSelect={(next) => void setView(next)}

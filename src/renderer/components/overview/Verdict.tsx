@@ -14,16 +14,19 @@ interface VerdictProps {
 }
 
 export function Verdict({ verdict, onPrimary, onSecondary, onOverride }: VerdictProps): JSX.Element {
-  const dotClass = `verdict__dot verdict__dot--${verdict.dot}`
+  const busy = verdict.kind === 'syncing' || verdict.kind === 'waiting'
   return (
     <section className="verdict" aria-live="polite">
-      <span className={dotClass} aria-hidden="true" />
       <div className="verdict__body">
-        <h1 className="verdict__sentence">{verdict.sentence}</h1>
+        <h1 className="verdict__sentence">
+          {busy && <span className="spinner" aria-hidden="true" />}
+          {verdict.sentence}
+        </h1>
         <p className="verdict__subline">{verdict.subline}</p>
       </div>
       <div className="verdict__actions">
         <button type="button" className="button button--primary" onClick={onPrimary}>
+          {busy && <span className="spinner" aria-hidden="true" />}
           {verdict.action}
         </button>
         {onSecondary && (

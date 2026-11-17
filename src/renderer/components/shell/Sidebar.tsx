@@ -17,6 +17,10 @@ interface SidebarProps {
   updateInfo?: UpdateInfo | null
   /** Whether sync is active (prevents restarting to install). */
   isSyncing?: boolean
+  /** Whether the sidebar is collapsed to a slim rail. */
+  collapsed?: boolean
+  /** Toggles the sidebar between full and collapsed. */
+  onToggleCollapse?: () => void
   onSwitch: (id: string) => void
   onConnect: () => void
   onSelect: (view: 'overview' | 'activity' | 'settings') => void
@@ -33,6 +37,8 @@ export function Sidebar({
   nextBackup,
   updateInfo,
   isSyncing,
+  collapsed = false,
+  onToggleCollapse,
   onSwitch,
   onConnect,
   onSelect,
@@ -46,15 +52,29 @@ export function Sidebar({
       updateInfo.status === 'downloaded')
 
   return (
-    <aside className="sidebar" aria-label="Sidebar">
-      <AccountSwitcher
-        accounts={accounts}
-        currentAccountId={currentAccountId}
-        onSwitch={onSwitch}
-        onConnect={onConnect}
-        onManage={() => onSelect('settings')}
-      />
-      <Nav view={view} hasUpdate={hasUpdate} onSelect={onSelect} />
+    <aside
+      className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}
+      aria-label="Sidebar"
+    >
+      <button
+        type="button"
+        className="button button--quiet sidebar__toggle"
+        onClick={onToggleCollapse}
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      >
+        {collapsed ? '›' : '‹'}
+      </button>
+      {!collapsed && (
+        <>
+          <AccountSwitcher
+            accounts={accounts}
+            currentAccountId={currentAccountId}
+            onSwitch={onSwitch}
+            onConnect={onConnect}
+            onManage={() => onSelect('settings')}
+          />
+          <Nav view={view} hasUpdate={hasUpdate} onSelect={onSelect} />
 
       {hasUpdate && (
         <div
@@ -119,6 +139,8 @@ export function Sidebar({
           {nextBackup ? nextBackup : '—'}
         </div>
       </div>
+        </>
+      )}
     </aside>
   )
 }
