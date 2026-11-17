@@ -17,8 +17,6 @@ interface SidebarProps {
   updateInfo?: UpdateInfo | null
   /** Whether sync is active (prevents restarting to install). */
   isSyncing?: boolean
-  /** Whether the sidebar is collapsed to a slim rail. */
-  collapsed?: boolean
   onSwitch: (id: string) => void
   onConnect: () => void
   onSelect: (view: 'overview' | 'activity' | 'settings') => void
@@ -35,7 +33,6 @@ export function Sidebar({
   nextBackup,
   updateInfo,
   isSyncing,
-  collapsed = false,
   onSwitch,
   onConnect,
   onSelect,
@@ -50,13 +47,8 @@ export function Sidebar({
       updateInfo.status === 'installing')
 
   return (
-    <aside
-      className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}
-      aria-label="Sidebar"
-    >
-      {!collapsed && (
-        <>
-          <AccountSwitcher
+    <aside className="sidebar" aria-label="Sidebar">
+      <AccountSwitcher
             accounts={accounts}
             currentAccountId={currentAccountId}
             onSwitch={onSwitch}
@@ -136,8 +128,6 @@ export function Sidebar({
           {nextBackup ? nextBackup : '—'}
         </div>
       </div>
-        </>
-      )}
     </aside>
   )
 }

@@ -76,20 +76,6 @@ export function App(): JSX.Element {
   } | null>(null)
   /** Whether the onboarding checklist is open. */
   const [onboardingOpen, setOnboardingOpen] = useState(false)
-  /**
-   * Whether the sidebar is collapsed.
-   *
-   * The choice is remembered, so the app opens the way the user left it.
-   */
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () => localStorage.getItem('drive-mirror.sidebar-collapsed') === '1',
-  )
-  const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed((current) => {
-      localStorage.setItem('drive-mirror.sidebar-collapsed', current ? '0' : '1')
-      return !current
-    })
-  }, [])
   /** The app's icon, shown next to the title. */
   const [icon, setIcon] = useState('')
   /**
@@ -399,7 +385,7 @@ export function App(): JSX.Element {
         icon={icon}
         version={updateInfo?.currentVersion}
       />
-      <div className={`shell ${sidebarCollapsed ? 'shell--collapsed' : ''}`}>
+      <div className="shell">
         <Sidebar
           accounts={settings?.accounts ?? []}
           currentAccountId={settings?.currentAccountId ?? null}
@@ -409,22 +395,12 @@ export function App(): JSX.Element {
           nextBackup={nextBackup}
           updateInfo={updateInfo}
           isSyncing={state?.running ?? false}
-          collapsed={sidebarCollapsed}
           onSwitch={(id) => void switchAccount(id)}
           onConnect={() => void connectAccount()}
           onSelect={(next) => void setView(next)}
           onDownloadUpdate={() => void window.driveMirror.downloadUpdate()}
           onInstallUpdate={() => window.driveMirror.installUpdate()}
         />
-        <button
-          type="button"
-          className="shell__handle"
-          onClick={toggleSidebar}
-          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {sidebarCollapsed ? '›' : '‹'}
-        </button>
         <main className="main">
           <div className="main-inner">
             {error && (

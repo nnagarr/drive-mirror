@@ -99,8 +99,6 @@
 /* --- App Shell Body (Sidebar + Main side-by-side) --- */
 
 .shell {
-  --sidebar-width: 232px;
-  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -108,41 +106,10 @@
   overflow: hidden;
 }
 
-.shell--collapsed {
-  --sidebar-width: 44px;
-}
-
-/* The collapse handle rides on the sidebar's edge, halfway down. It
-   lives outside the sidebar so it cannot make the sidebar scroll
-   sideways. */
-.shell__handle {
-  position: absolute;
-  left: calc(var(--sidebar-width) - 13px);
-  top: 50%;
-  transform: translateY(-50%);
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  font-size: 14px;
-  line-height: 1;
-  border-radius: 50%;
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  color: var(--muted);
-  cursor: pointer;
-  z-index: 20;
-}
-
-.shell__handle:hover {
-  background: var(--surface-3);
-  color: var(--ink);
-}
-
 /* --- Sidebar --- */
 
 .sidebar {
-  position: relative;
-  width: var(--sidebar-width);
+  width: 232px;
   flex: none;
   border-right: 1px solid var(--line);
   background: var(--surface-2);
@@ -154,12 +121,6 @@
   overflow-x: hidden;
   user-select: none;
   box-sizing: border-box;
-  transition: width 160ms ease;
-}
-
-.sidebar--collapsed {
-  width: var(--sidebar-width);
-  padding: 14px 6px 12px;
 }
 
 /* --- Account Switcher --- */
