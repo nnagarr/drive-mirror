@@ -399,7 +399,7 @@ export function App(): JSX.Element {
         icon={icon}
         version={updateInfo?.currentVersion}
       />
-      <div className="shell">
+      <div className={`shell ${sidebarCollapsed ? 'shell--collapsed' : ''}`}>
         <Sidebar
           accounts={settings?.accounts ?? []}
           currentAccountId={settings?.currentAccountId ?? null}
@@ -410,13 +410,21 @@ export function App(): JSX.Element {
           updateInfo={updateInfo}
           isSyncing={state?.running ?? false}
           collapsed={sidebarCollapsed}
-          onToggleCollapse={toggleSidebar}
           onSwitch={(id) => void switchAccount(id)}
           onConnect={() => void connectAccount()}
           onSelect={(next) => void setView(next)}
           onDownloadUpdate={() => void window.driveMirror.downloadUpdate()}
           onInstallUpdate={() => window.driveMirror.installUpdate()}
         />
+        <button
+          type="button"
+          className="shell__handle"
+          onClick={toggleSidebar}
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {sidebarCollapsed ? '›' : '‹'}
+        </button>
         <main className="main">
           <div className="main-inner">
             {error && (

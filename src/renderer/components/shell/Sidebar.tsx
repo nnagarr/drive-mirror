@@ -19,8 +19,6 @@ interface SidebarProps {
   isSyncing?: boolean
   /** Whether the sidebar is collapsed to a slim rail. */
   collapsed?: boolean
-  /** Toggles the sidebar between full and collapsed. */
-  onToggleCollapse?: () => void
   onSwitch: (id: string) => void
   onConnect: () => void
   onSelect: (view: 'overview' | 'activity' | 'settings') => void
@@ -38,7 +36,6 @@ export function Sidebar({
   updateInfo,
   isSyncing,
   collapsed = false,
-  onToggleCollapse,
   onSwitch,
   onConnect,
   onSelect,
@@ -57,15 +54,6 @@ export function Sidebar({
       className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}
       aria-label="Sidebar"
     >
-      <button
-        type="button"
-        className="button button--quiet sidebar__toggle"
-        onClick={onToggleCollapse}
-        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      >
-        {collapsed ? '›' : '‹'}
-      </button>
       {!collapsed && (
         <>
           <AccountSwitcher

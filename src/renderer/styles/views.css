@@ -665,7 +665,9 @@
   height: 42px;
   border-radius: 50%;
   background: var(--primary);
-  color: #fff;
+  /* The ink that goes with the primary surface. A hard-coded white
+     letter is invisible on the dark theme's near-white primary. */
+  color: var(--primary-ink);
   display: grid;
   place-items: center;
   font-weight: 600;
@@ -823,7 +825,7 @@
 
 .onboarding-rail__step--done .onboarding-rail__step__number {
   background: var(--safe);
-  color: #fff;
+  color: var(--primary-ink);
 }
 
 .onboarding-rail__step__check {
