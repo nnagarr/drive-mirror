@@ -73,6 +73,47 @@ describe('account settings data-honesty fields', () => {
     await rm(root, { recursive: true, force: true })
   })
 
+  it('round trips the note and canOverride of a skipped mirror', async () => {
+    const root = await tempRoot()
+    const store = createAccountSettingsStore(root)
+    const settings = defaultAccountSettings()
+    settings.mirrorState = {
+      Docs: {
+        status: 'skipped',
+        counts: { uploaded: 0, updated: 0, downloaded: 0, trashed: 0, errors: 0 },
+        note: 'the number of files fell by more than half in: photos',
+        canOverride: true,
+      },
+    }
+    await store.write('acc_x', settings)
+    const read = await store.read('acc_x')
+    expect(read.mirrorState.Docs?.note).toBe('the number of files fell by more than half in: photos')
+    expect(read.mirrorState.Docs?.canOverride).toBe(true)
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('drops a hand-edited note of the wrong kind', async () => {
+    const root = await tempRoot()
+    await mkdir(accountDir(root, 'acc_x'), { recursive: true })
+    await writeFile(
+      accountSettingsPath(root, 'acc_x'),
+      JSON.stringify({
+        ...defaultAccountSettings(),
+        mirrorState: {
+          Docs: {
+            status: 'skipped',
+            counts: { uploaded: 0, updated: 0, downloaded: 0, trashed: 0, errors: 0 },
+            note: 42,
+          },
+        },
+      }),
+      'utf8',
+    )
+    const s = await createAccountSettingsStore(root).read('acc_x')
+    expect(s.mirrorState.Docs?.note).toBeUndefined()
+    await rm(root, { recursive: true, force: true })
+  })
+
   it('drops a lastRun that is not a RunSummary', async () => {
     const root = await tempRoot()
     await mkdir(accountDir(root, 'acc_x'), { recursive: true })

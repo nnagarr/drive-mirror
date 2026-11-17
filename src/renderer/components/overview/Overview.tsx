@@ -105,6 +105,25 @@ export function Overview({
       case 'error':
         onViewAll()
         break
+      case 'attention': {
+        // Reviewing means seeing what happened, not syncing again: the
+        // first folder that needs you opens in its drawer.
+        const needsYouMirror = mirrors.find(
+          (m) =>
+            m.status === 'skipped' ||
+            m.status === 'attention' ||
+            m.recovered.some((r) => !!r.blocked) ||
+            m.counts.errors > 0,
+        )
+        if (needsYouMirror) {
+          onEdit(needsYouMirror.name)
+        } else if (onPrimary) {
+          onPrimary()
+        } else {
+          onSync()
+        }
+        break
+      }
       case 'paused': {
         const pausedMirror = mirrors.find((m) => !m.enabled)
         if (pausedMirror) {

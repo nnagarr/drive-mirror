@@ -528,6 +528,7 @@ export function App(): JSX.Element {
             }
             onRemove={(name) => void removeMirror(name)}
             onDownload={(mirrorName, fileId) => void download(mirrorName, fileId)}
+            onOverride={(name) => void overrideSync(name)}
           />
         )
       })()}

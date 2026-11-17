@@ -20,6 +20,8 @@ interface FolderDrawerProps {
   onChangeDrive: (name: string, drivePath: string) => void
   onRemove: (name: string) => void
   onDownload: (mirrorName: string, fileId: string) => void
+  /** Approves a tripped guard and syncs the folder anyway. */
+  onOverride?: (name: string) => void
 }
 
 const disabledWhileSyncing = (isSyncing: boolean) => ({
@@ -37,10 +39,13 @@ export function FolderDrawer({
   onRemove,
   onDownload,
   onSync,
+  onOverride,
 }: FolderDrawerProps): JSX.Element {
   const status = rowStatus(mirror)
   const paused = !mirror.enabled
   const racingDisabled = isSyncing || signedOut
+  /** What the last run stopped this folder for, when it did. */
+  const stopped = mirror.status === 'skipped' && mirror.note ? mirror.note : null
 
   return (
     <div className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
@@ -52,8 +57,10 @@ export function FolderDrawer({
           </div>
           <div className="drawer__title-group">
             <h2 id="drawer-title" className="drawer__title">{mirror.name}</h2>
-            <span className={`status-dot status-dot--${status === 'error' ? 'error' : status === 'syncing' ? 'syncing' : 'safe'}`} aria-hidden="true" />
-            <span className="drawer__status">{status.charAt(0).toUpperCase() + status.slice(1)}</span>
+            <span className={`status-dot status-dot--${status === 'error' ? 'error' : status === 'syncing' ? 'syncing' : status === 'needs-you' ? 'attention' : 'safe'}`} aria-hidden="true" />
+            <span className="drawer__status">
+              {status === 'needs-you' ? 'Needs you' : status.charAt(0).toUpperCase() + status.slice(1)}
+            </span>
           </div>
           <button type="button" className="button button--quiet" onClick={onClose} aria-label="Close drawer">
             ✕
@@ -105,6 +112,27 @@ export function FolderDrawer({
               </span>
             </div>
           </div>
+
+          {stopped && (
+            <div className="drawer__section">
+              <div className="drawer__section__label">What happened</div>
+              <p className="drawer__hint">{stopped}</p>
+              {mirror.canOverride && onOverride && !isSyncing && !signedOut && (
+                <button
+                  type="button"
+                  className="button button--danger"
+                  onClick={() => void onOverride(mirror.name)}
+                >
+                  Sync anyway
+                </button>
+              )}
+              {!mirror.canOverride && (
+                <p className="drawer__hint">
+                  The next sync will try this folder again on its own.
+                </p>
+              )}
+            </div>
+          )}
 
           {mirror.recovered.length > 0 && (
             <RecoveredFiles files={mirror.recovered} onBringBack={(id) => void onDownload(mirror.name, id)} />

@@ -351,6 +351,15 @@ export function createRunner(deps: RunnerDeps): Runner {
           }
           if (mirrorCard.status === 'idle' || isNewerRun) {
             mirrorCard.status = persisted.status
+            // A mirror the last run stopped keeps the reason with it, so
+            // the drawer can show what happened without a new run.
+            if (persisted.status === 'skipped') {
+              mirrorCard.note = persisted.note
+              mirrorCard.canOverride = persisted.canOverride
+            } else {
+              mirrorCard.note = undefined
+              mirrorCard.canOverride = undefined
+            }
           }
         }
         const mm = manifest.mirrors[config.name]
@@ -639,6 +648,9 @@ export function createRunner(deps: RunnerDeps): Runner {
     manifest.mirrors[config.name] = mirrorManifest
 
     mirrorCard.status = counts.errors > 0 ? 'error' : 'idle'
+    // The mirror is no longer stopped, so the reason for the stop goes.
+    mirrorCard.note = undefined
+    mirrorCard.canOverride = undefined
     mirrorCard.fileCount = local.recursiveCounts[''] ?? 0
     mirrorCard.lastSyncedAt = mirrorManifest.lastSyncAt ?? null
     mirrorCard.counts = counts
@@ -656,6 +668,10 @@ export function createRunner(deps: RunnerDeps): Runner {
   ): void {
     const mirrorCard = card(accountId, name)
     mirrorCard.status = 'skipped'
+    // The reason travels with the card, so the folder's drawer can show
+    // what happened even after the app has been restarted.
+    mirrorCard.note = message
+    mirrorCard.canOverride = canOverride
     // A skipped mirror is something the user has to know about. Without
     // this in the summary, a run that skipped half the mirrors reads as
     // "everything is up to date".
@@ -831,13 +847,15 @@ export function createRunner(deps: RunnerDeps): Runner {
       if (deps.saveAccountSettings) {
         const current = await account.settings()
         const cards = stateFor(accountId).cards
-        const mirrorState: Record<string, { status: 'idle' | 'skipped' | 'attention' | 'error'; counts: { uploaded: number; updated: number; downloaded: number; trashed: number; errors: number } }> = {
+        const mirrorState: Record<string, { status: 'idle' | 'skipped' | 'attention' | 'error'; counts: { uploaded: number; updated: number; downloaded: number; trashed: number; errors: number }; note?: string; canOverride?: boolean }> = {
           ...(current.mirrorState ?? {}),
         }
         for (const [name, mirrorCard] of cards) {
           mirrorState[name] = {
             status: mirrorCard.status === 'syncing' ? 'idle' : (mirrorCard.status as 'idle' | 'skipped' | 'attention' | 'error'),
             counts: { ...mirrorCard.counts },
+            note: mirrorCard.note,
+            canOverride: mirrorCard.canOverride,
           }
         }
         const existingHistory = Array.isArray(current.runHistory) ? current.runHistory : []
@@ -868,13 +886,15 @@ export function createRunner(deps: RunnerDeps): Runner {
         try {
           const current = await account.settings()
           const cards = stateFor(accountId).cards
-          const mirrorState: Record<string, { status: 'idle' | 'skipped' | 'attention' | 'error'; counts: { uploaded: number; updated: number; downloaded: number; trashed: number; errors: number } }> = {
+          const mirrorState: Record<string, { status: 'idle' | 'skipped' | 'attention' | 'error'; counts: { uploaded: number; updated: number; downloaded: number; trashed: number; errors: number }; note?: string; canOverride?: boolean }> = {
             ...(current.mirrorState ?? {}),
           }
           for (const [name, mirrorCard] of cards) {
             mirrorState[name] = {
               status: mirrorCard.status === 'syncing' ? 'idle' : (mirrorCard.status as 'idle' | 'skipped' | 'attention' | 'error'),
               counts: { ...mirrorCard.counts },
+              note: mirrorCard.note,
+              canOverride: mirrorCard.canOverride,
             }
           }
           await deps.saveAccountSettings(accountId, { mirrorState })
@@ -934,6 +954,13 @@ export function createRunner(deps: RunnerDeps): Runner {
           }
           if (mirrorCard.status === 'idle' || isNewerRun) {
             mirrorCard.status = persisted.status
+            if (persisted.status === 'skipped') {
+              mirrorCard.note = persisted.note
+              mirrorCard.canOverride = persisted.canOverride
+            } else {
+              mirrorCard.note = undefined
+              mirrorCard.canOverride = undefined
+            }
           }
         }
         const mirrorManifest = manifest.mirrors[config.name]

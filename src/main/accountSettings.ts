@@ -43,7 +43,7 @@ export interface AccountSettings {
    * Per-mirror UI state kept across restarts: status and counts. Never
    * `syncing`, `running` or `phase`; a restart means no run is in flight.
    */
-  mirrorState: Record<string, { status: 'idle' | 'skipped' | 'attention' | 'error'; counts: { uploaded: number; updated: number; downloaded: number; trashed: number; errors: number } }>
+  mirrorState: Record<string, { status: 'idle' | 'skipped' | 'attention' | 'error'; counts: { uploaded: number; updated: number; downloaded: number; trashed: number; errors: number }; note?: string; canOverride?: boolean }>
 }
 
 /** A new account, with nothing in it. */
@@ -119,7 +119,16 @@ export function createAccountSettingsStore(root: string): AccountSettingsStore {
         if (status !== 'idle' && status !== 'skipped' && status !== 'attention' && status !== 'error') continue
         const counts = (entry as Record<string, unknown>).counts
         if (!isMirrorCounts(counts)) continue
-        mirrorState[name] = { status: status as 'idle' | 'skipped' | 'attention' | 'error', counts }
+        const record: AccountSettings['mirrorState'][string] = {
+          status: status as 'idle' | 'skipped' | 'attention' | 'error',
+          counts,
+        }
+        // The reason a run stopped the mirror travels with it, when the
+        // file has one. A hand-edited value of the wrong kind is dropped.
+        const note = (entry as Record<string, unknown>).note
+        if (typeof note === 'string' && note.length > 0) record.note = note
+        if ((entry as Record<string, unknown>).canOverride === true) record.canOverride = true
+        mirrorState[name] = record
       }
     }
     return {

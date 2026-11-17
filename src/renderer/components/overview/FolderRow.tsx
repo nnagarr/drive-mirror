@@ -23,7 +23,7 @@ export function FolderRow({ mirror, onSync, onEdit, onPauseResume }: FolderRowPr
   const label = isSyncing ? 'Syncing…' : status.charAt(0).toUpperCase() + status.slice(1)
   const note =
     mirror.status === 'skipped'
-      ? 'The sync was stopped. Open to review.'
+      ? mirror.note ?? 'The sync was stopped. Open to review.'
       : mirror.recovered.some((r) => !!r.blocked)
         ? "1 file can't come back yet."
         : mirror.recovered.length > 0
@@ -59,6 +59,13 @@ export function FolderRow({ mirror, onSync, onEdit, onPauseResume }: FolderRowPr
           type="button"
           className={`button ${needsYou || isSyncing ? 'button--danger' : isPaused ? 'button--primary' : 'button--sage'}`}
           onClick={() => {
+            // A folder that needs you is reviewed, not blindly synced
+            // again: the button opens its drawer, which shows what
+            // happened and what can be done about it.
+            if (needsYou) {
+              onEdit(mirror.name)
+              return
+            }
             if (isPaused) {
               if (onPauseResume) {
                 onPauseResume(mirror.name, true)

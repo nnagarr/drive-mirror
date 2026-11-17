@@ -30,6 +30,10 @@ export interface MirrorCard {
   counts: { uploaded: number; updated: number; downloaded: number; trashed: number; errors: number }
   /** Files the app trashed that the user has since restored on Drive. */
   recovered: RecoveredFile[]
+  /** Why the last run stopped this mirror, when it did. */
+  note?: string
+  /** Whether the check that stopped it can be overridden by the user. */
+  canOverride?: boolean
 }
 
 /** A file that is waiting to be pulled back down to the disk. */
