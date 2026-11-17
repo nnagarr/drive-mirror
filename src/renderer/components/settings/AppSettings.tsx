@@ -245,7 +245,12 @@ export function AppSettingsTab({
           <button
             type="button"
             className="button button--secondary"
-            disabled={running || updateInfo?.status === 'checking' || updateInfo?.status === 'downloading'}
+            disabled={
+              running ||
+              updateInfo?.status === 'checking' ||
+              updateInfo?.status === 'downloading' ||
+              updateInfo?.status === 'installing'
+            }
             onClick={() => onCheckForUpdates?.()}
           >
             {updateInfo?.status === 'checking' ? 'Checking for updates...' : 'Check for updates'}
@@ -271,6 +276,14 @@ export function AppSettingsTab({
             </button>
           )}
         </div>
+        {updateInfo?.status === 'installing' && (
+          <div className="settings-tab__field">
+            <span className="field__hint">
+              <span className="spinner" aria-hidden="true" /> Installing update... The app will
+              restart on its own.
+            </span>
+          </div>
+        )}
         {updateInfo?.status === 'not-available' && (
           <p className="settings-tab__status">You are on the latest version.</p>
         )}

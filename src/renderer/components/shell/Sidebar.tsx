@@ -49,7 +49,8 @@ export function Sidebar({
     updateInfo != null &&
     (updateInfo.status === 'available' ||
       updateInfo.status === 'downloading' ||
-      updateInfo.status === 'downloaded')
+      updateInfo.status === 'downloaded' ||
+      updateInfo.status === 'installing')
 
   return (
     <aside
@@ -84,17 +85,25 @@ export function Sidebar({
         >
           <div className="sidebar__update__header">
             <span className="sidebar__update__title">
-              {updateInfo.status === 'downloaded'
-                ? 'Update ready'
-                : updateInfo.status === 'downloading'
-                  ? 'Downloading update'
-                  : 'Update available'}
+              {updateInfo.status === 'installing'
+                ? 'Installing update'
+                : updateInfo.status === 'downloaded'
+                  ? 'Update ready'
+                  : updateInfo.status === 'downloading'
+                    ? 'Downloading update'
+                    : 'Update available'}
             </span>
-            {updateInfo.availableVersion && (
+            {updateInfo.status !== 'installing' && updateInfo.availableVersion && (
               <span className="sidebar__update__version">v{updateInfo.availableVersion}</span>
             )}
           </div>
 
+          {updateInfo.status === 'installing' && (
+            <div className="sidebar__update__progress" aria-live="polite">
+              <span className="spinner" aria-hidden="true" />{' '}
+              <span className="sidebar__update__version">The app will restart.</span>
+            </div>
+          )}
           {updateInfo.status === 'downloading' && (
             <div className="sidebar__update__progress">
               <div

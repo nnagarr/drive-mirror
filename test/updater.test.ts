@@ -175,12 +175,13 @@ describe('UpdateManager', () => {
     expect(backend.checkForUpdates).not.toHaveBeenCalled()
   })
 
-  it('calls quitAndInstall on installUpdate only when downloaded', () => {
+  it('calls quitAndInstall on installUpdate only when downloaded', async () => {
     const backend = new MockUpdaterBackend()
     const manager = createUpdateManager({
       backend,
       currentVersion: '1.0.0',
       isPackaged: true,
+      installDelayMs: 0,
     })
 
     // Ignored when not downloaded
@@ -190,6 +191,10 @@ describe('UpdateManager', () => {
     // Allowed when downloaded
     backend.emit('update-downloaded', { version: '1.1.0' })
     manager.installUpdate()
+    // The installing state is what the interface shows while the update
+    // is being put in place.
+    expect(manager.getStatus().status).toBe('installing')
+    await new Promise((resolve) => setTimeout(resolve, 10))
     expect(backend.quitAndInstall).toHaveBeenCalled()
   })
 
@@ -267,7 +272,7 @@ describe('UpdateManager', () => {
     expect(status.error).toBe('Cannot find channelFile in the latest release artifacts')
   })
 
-  it('ElectronAutoUpdaterBackend calls quitAndInstall with silent=true and forceRunAfter=true', () => {
+  it('ElectronAutoUpdaterBackend shows the installer UI and runs the app after', () => {
     const mock = {
       autoDownload: true,
       autoInstallOnAppQuit: false,
@@ -275,7 +280,9 @@ describe('UpdateManager', () => {
     }
     const backend = new ElectronAutoUpdaterBackend(mock)
     backend.quitAndInstall()
-    expect(mock.quitAndInstall).toHaveBeenCalledWith(true, true)
+    // Not silent: the one-click installer shows the Windows progress
+    // bar. The app is started again when the install finishes.
+    expect(mock.quitAndInstall).toHaveBeenCalledWith(false, true)
   })
 })
 

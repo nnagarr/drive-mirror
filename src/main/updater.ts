@@ -14,6 +14,7 @@ export type UpdateState =
   | 'not-available'
   | 'downloading'
   | 'downloaded'
+  | 'installing'
   | 'error'
 
 export interface UpdateInfo {
@@ -55,6 +56,8 @@ export interface UpdateManagerDeps {
   currentVersion: string
   isPackaged?: boolean
   isAutoDownload?: () => boolean | Promise<boolean>
+  /** How long the installing state is on screen before the app closes. */
+  installDelayMs?: number
   log?: (message: string) => void
 }
 
@@ -251,7 +254,16 @@ export function createUpdateManager(deps: UpdateManagerDeps): UpdateManager {
         deps.log?.('Cannot install update: no update has been downloaded')
         return
       }
-      deps.backend.quitAndInstall()
+      // The installing state is what the interface shows between the
+      // click and the moment the app closes to take the update. The
+      // installer itself runs silently and starts the app again when it
+      // is done, so the user never sees a wizard.
+      setStatus({ status: 'installing', progress: 100, error: undefined })
+      // A short pause so the installing state is on screen before the
+      // window goes away.
+      setTimeout(() => {
+        deps.backend.quitAndInstall()
+      }, deps.installDelayMs ?? 1200)
     },
 
     onChange(listener: (info: UpdateInfo) => void): () => void {
@@ -284,7 +296,10 @@ export class ElectronAutoUpdaterBackend implements UpdaterBackend {
   }
 
   quitAndInstall(): void {
-    this.updater.quitAndInstall(true, true)
+    // Not silent: the one-click installer shows the Windows progress bar
+    // while it replaces the app, and starts the app again when it is
+    // done. Silent would close the app and leave an empty screen.
+    this.updater.quitAndInstall(false, true)
   }
 
   on(event: string, listener: (...args: any[]) => void): this {
