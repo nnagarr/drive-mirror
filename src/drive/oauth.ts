@@ -119,15 +119,21 @@ export async function exchangeCode(
   }
 }
 
+/** How many times a transient network or 5xx token refresh is retried. */
+const MAX_REFRESH_RETRIES = 3
+
 /**
  * Exchange a refresh token for a fresh access token.
  *
  * The refresh token does not change, so the app keeps it and asks for a new
- * access token whenever the old one is close to expiring.
+ * access token whenever the old one is close to expiring. Transient network
+ * and 5xx errors are retried with exponential backoff (for example while Wi-Fi
+ * is reconnecting after sleep); 4xx refusals fail immediately.
  */
 export async function refreshAccessToken(
   opts: { clientId: string; clientSecret: string; refreshToken: string },
   fetchImpl: typeof fetch = globalThis.fetch,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 ): Promise<{ access_token: string; expiry_date: number }> {
   const body = new URLSearchParams({
     refresh_token: opts.refreshToken,
@@ -136,28 +142,43 @@ export async function refreshAccessToken(
     grant_type: 'refresh_token',
   })
 
-  const response = await fetchImpl(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  })
+  for (let attempt = 0; ; attempt += 1) {
+    let response: Response
+    try {
+      response = await fetchImpl(TOKEN_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      })
+    } catch (err) {
+      if (attempt >= MAX_REFRESH_RETRIES) {
+        throw err
+      }
+      await sleep(1000 * 2 ** attempt)
+      continue
+    }
 
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`the token refresh was refused: ${response.status} ${text}`)
-  }
+    if (!response.ok) {
+      const text = await response.text()
+      if (response.status >= 500 && attempt < MAX_REFRESH_RETRIES) {
+        await sleep(1000 * 2 ** attempt)
+        continue
+      }
+      throw new Error(`the token refresh was refused: ${response.status} ${text}`)
+    }
 
-  const json = (await response.json()) as {
-    access_token?: string
-    expires_in?: number
-  }
+    const json = (await response.json()) as {
+      access_token?: string
+      expires_in?: number
+    }
 
-  if (!json.access_token) {
-    throw new Error('the token refresh returned no access token')
-  }
+    if (!json.access_token) {
+      throw new Error('the token refresh returned no access token')
+    }
 
-  return {
-    access_token: json.access_token,
-    expiry_date: Date.now() + (json.expires_in ?? 3600) * 1000,
+    return {
+      access_token: json.access_token,
+      expiry_date: Date.now() + (json.expires_in ?? 3600) * 1000,
+    }
   }
 }

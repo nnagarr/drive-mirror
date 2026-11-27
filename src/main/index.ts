@@ -557,6 +557,9 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
       clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
       onResume: (fn) => (wakeMonitor ? wakeMonitor.onResume(fn) : () => {}),
       notify: (title, body) => showNotification(title, body),
+      log: (message) => logger.log({ level: 'error', message, account: id }),
+      wakeDelayMs: 5000,
+      wakeRetryDelaysMs: [15_000, 30_000, 60_000],
       })
       schedulers.set(id, scheduler)
       return scheduler

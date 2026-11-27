@@ -45,6 +45,14 @@ export interface SchedulerDeps {
   onResume(fn: () => void): () => void
   /** Tell the user something. */
   notify(title: string, body: string): void
+  /** Record a failure message in the application log. */
+  log?(message: string): void
+  /** Milliseconds to wait after wake/unlock so networking can settle before catch-up. */
+  wakeDelayMs?: number
+  /** Backoff delays (ms) for retrying failed wake catch-up runs before notifying. */
+  wakeRetryDelaysMs?: number[]
+  /** Wait helper, injectable for tests. */
+  sleep?(ms: number): Promise<void>
 }
 
 /** The scheduler. */
@@ -81,6 +89,28 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   let dueAt: Date | null = null
   let stopResume: (() => void) | null = null
   let wakeInFlight: Promise<void> | null = null
+  let wakeRetryCount = 0
+  let wakeRetryTimer: unknown = null
+  let stopped = false
+
+  const sleep =
+    deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  const wakeDelayMs = deps.wakeDelayMs ?? 0
+  const wakeRetryDelaysMs = deps.wakeRetryDelaysMs ?? []
+
+  /** Permanent auth/config errors should surface immediately rather than retrying. */
+  function isRetryableFailure(message: string): boolean {
+    return !/not signed in|client id or secret is missing|refused: 4\d\d/i.test(message)
+  }
+
+  /** Clear any pending wake-retry timer and reset retry count. */
+  function clearWakeRetry(): void {
+    if (wakeRetryTimer !== null) {
+      deps.clearTimer(wakeRetryTimer)
+      wakeRetryTimer = null
+    }
+    wakeRetryCount = 0
+  }
 
   /**
    * Arm the timer for the next slot.
@@ -115,10 +145,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   /** Do the run, and remember when it happened. */
-  async function doRun(): Promise<void> {
+  async function doRun(retryOnFailure: boolean): Promise<void> {
     try {
       const summary = await deps.runSync()
       if (summary.skipped) {
+        clearWakeRetry()
         // The run did not happen: another account was syncing. The clock
         // must not move, or the slot is lost and never caught up.
         deps.notify(
@@ -131,30 +162,56 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         arm(dueAt ?? deps.now())
         return
       }
+      clearWakeRetry()
       lastRunAt = deps.now().toISOString()
       await persist({ lastRunAt })
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      deps.log?.(`the scheduled sync did not finish: ${message}`)
+      if (
+        retryOnFailure &&
+        !stopped &&
+        wakeRetryCount < wakeRetryDelaysMs.length &&
+        isRetryableFailure(message)
+      ) {
+        const delayMs = wakeRetryDelaysMs[wakeRetryCount]!
+        wakeRetryCount += 1
+        if (wakeRetryTimer !== null) {
+          deps.clearTimer(wakeRetryTimer)
+        }
+        wakeRetryTimer = deps.setTimer(() => {
+          wakeRetryTimer = null
+          void runCatchUp()
+        }, delayMs)
+        return
+      }
+      clearWakeRetry()
       // The user is not watching when a scheduled run happens, so a
       // failure that nobody hears about is a backup that quietly stopped.
-      deps.notify(
-        'The scheduled sync did not finish',
-        err instanceof Error ? err.message : String(err),
-      )
+      deps.notify('The scheduled sync did not finish', message)
     }
     arm()
   }
 
-  function runNow(): Promise<void> {
+  function runWithRetry(retryOnFailure: boolean): Promise<void> {
     // A run that is already going is the run. A second request joins it
     // rather than starting a second one.
     if (inFlight) return inFlight
-    const run = doRun()
+    const run = doRun(retryOnFailure)
     inFlight = run
     const clear = (): void => {
       if (inFlight === run) inFlight = null
     }
     run.then(clear, clear)
     return run
+  }
+
+  function runNow(): Promise<void> {
+    return runWithRetry(false)
+  }
+
+  function runCatchUp(): Promise<void> {
+    return runWithRetry(true)
   }
 
   /**
@@ -195,6 +252,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       deps.clearTimer(timer)
       timer = null
     }
+    clearWakeRetry()
     if (stopResume) {
       stopResume()
       stopResume = null
@@ -203,6 +261,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   return {
     async start(): Promise<void> {
+      stopped = false
       const schedule = await refresh()
       if (!schedule.enabled) {
         await removeTask()
@@ -215,7 +274,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // signed in - happens once, now.
       if (catchUpIsDue()) {
         deps.notify('Drive Mirror', 'Catching up on missed scheduled sync')
-        await runNow()
+        await runCatchUp()
       } else {
         arm()
       }
@@ -241,6 +300,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     },
 
     stop(): void {
+      stopped = true
       stopTimer()
     },
 
@@ -258,13 +318,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (wakeInFlight) return wakeInFlight
     wakeInFlight = (async () => {
       try {
-        if (inFlight) return
+        if (stopped || inFlight || wakeRetryTimer !== null) return
+        if (wakeDelayMs > 0) {
+          await sleep(wakeDelayMs)
+        }
+        if (stopped || inFlight || wakeRetryTimer !== null) return
         const schedule = await refresh()
         if (!schedule.enabled) return
-        if (inFlight) return
+        if (stopped || inFlight || wakeRetryTimer !== null) return
         if (catchUpIsDue()) {
           deps.notify('Drive Mirror', 'Catching up on missed scheduled sync')
-          await runNow()
+          await runCatchUp()
           return
         }
         arm()

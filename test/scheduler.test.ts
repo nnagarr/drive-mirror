@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createScheduler } from '../src/main/scheduler'
+import type { SchedulerDeps } from '../src/main/scheduler'
 import { defaultAccountSettings } from '../src/main/accountSettings'
 import type { RunSummary } from '../src/main/ipc'
 import type { ScheduleShape } from '../src/core/schedule'
@@ -36,7 +37,7 @@ function harness(
     notifications: [] as string[],
   }
 
-  const deps = {
+  const deps: SchedulerDeps = {
     accountId: 'acc_test',
     accountEmail: 'user@example.com',
     settings: async (): Promise<AccountSettings> => settings,
@@ -316,5 +317,166 @@ describe('the scheduler', () => {
     const release = releaseSync as (() => void) | null
     release?.()
     await running
+  })
+
+  it('logs an error when a scheduled run fails', async () => {
+    const h = harness()
+    const logs: string[] = []
+    h.deps.log = (message: string) => logs.push(message)
+    h.deps.runSync = async (): Promise<RunSummary> => {
+      throw new Error('fetch failed')
+    }
+    const s = createScheduler(h.deps)
+
+    await s.runNow()
+
+    expect(logs.some((line) => line.includes('fetch failed'))).toBe(true)
+  })
+
+  it('waits wakeDelayMs before checking and running wake catch-up', async () => {
+    let wake: (() => void) | null = null
+    let currentTime = new Date('2026-03-01T05:00:00')
+    const delays: number[] = []
+    const h = harness({
+      shape: { kind: 'every-hours', everyHours: 6 },
+      lastRunAt: new Date('2026-03-01T00:00:00').toISOString(),
+    })
+    h.deps.now = () => currentTime
+    h.deps.onResume = (fn) => {
+      wake = fn
+      return () => {
+        wake = null
+      }
+    }
+    h.deps.wakeDelayMs = 5000
+    h.deps.sleep = async (ms: number) => {
+      delays.push(ms)
+    }
+
+    const s = createScheduler(h.deps)
+    await s.start()
+
+    currentTime = new Date('2026-03-01T10:00:00')
+    const triggerWake = wake as (() => void) | null
+    triggerWake?.()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(delays).toContain(5000)
+    expect(h.calls.runs).toBe(1)
+  })
+
+  it('retries a failed wake catch-up run silently and succeeds without error notification', async () => {
+    let wake: (() => void) | null = null
+    let currentTime = new Date('2026-03-01T05:00:00')
+    let attempts = 0
+    const pendingTimers: Array<{ fn: () => void; ms: number }> = []
+    const h = harness({
+      shape: { kind: 'every-hours', everyHours: 6 },
+      lastRunAt: new Date('2026-03-01T00:00:00').toISOString(),
+    })
+    h.deps.now = () => currentTime
+    h.deps.onResume = (fn) => {
+      wake = fn
+      return () => {
+        wake = null
+      }
+    }
+    h.deps.setTimer = (fn: () => void, ms: number): unknown => {
+      h.calls.armed += 1
+      pendingTimers.push({ fn, ms })
+      return pendingTimers.length
+    }
+    h.deps.runSync = async (): Promise<RunSummary> => {
+      attempts += 1
+      h.calls.runs += 1
+      if (attempts === 1) {
+        throw new Error('fetch failed')
+      }
+      return {
+        startedAt: '',
+        finishedAt: '',
+        uploaded: 0,
+        updated: 0,
+        downloaded: 0,
+        trashed: 0,
+        errors: 0,
+        mirrors: [],
+        changed: [],
+        reports: [],
+      }
+    }
+    h.deps.wakeRetryDelaysMs = [15_000, 30_000]
+
+    const s = createScheduler(h.deps)
+    await s.start()
+    pendingTimers.length = 0
+
+    currentTime = new Date('2026-03-01T10:00:00')
+    const triggerWake = wake as (() => void) | null
+    triggerWake?.()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    // Attempt 1 failed: no failure notification yet, retry timer scheduled for 15s
+    expect(attempts).toBe(1)
+    expect(h.calls.notifications).toEqual(['Catching up on missed scheduled sync'])
+    expect(pendingTimers).toHaveLength(1)
+    expect(pendingTimers[0]!.ms).toBe(15_000)
+
+    // Fire the retry timer -> attempt 2 succeeds
+    pendingTimers.shift()!.fn()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(attempts).toBe(2)
+    expect(h.calls.notifications).toEqual(['Catching up on missed scheduled sync'])
+    expect(h.settings.schedule.lastRunAt).toBe(currentTime.toISOString())
+  })
+
+  it('notifies once when wake catch-up exhausts all retries', async () => {
+    let wake: (() => void) | null = null
+    let currentTime = new Date('2026-03-01T05:00:00')
+    const pendingTimers: Array<{ fn: () => void; ms: number }> = []
+    const h = harness({
+      shape: { kind: 'every-hours', everyHours: 6 },
+      lastRunAt: new Date('2026-03-01T00:00:00').toISOString(),
+    })
+    h.deps.now = () => currentTime
+    h.deps.onResume = (fn) => {
+      wake = fn
+      return () => {
+        wake = null
+      }
+    }
+    h.deps.setTimer = (fn: () => void, ms: number): unknown => {
+      h.calls.armed += 1
+      pendingTimers.push({ fn, ms })
+      return pendingTimers.length
+    }
+    h.deps.runSync = async (): Promise<RunSummary> => {
+      h.calls.runs += 1
+      throw new Error('fetch failed')
+    }
+    h.deps.wakeRetryDelaysMs = [15_000]
+
+    const s = createScheduler(h.deps)
+    await s.start()
+    pendingTimers.length = 0
+
+    currentTime = new Date('2026-03-01T10:00:00')
+    const triggerWake = wake as (() => void) | null
+    triggerWake?.()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(h.calls.runs).toBe(1)
+    expect(h.calls.notifications).toEqual(['Catching up on missed scheduled sync'])
+
+    // Fire the single retry -> still fails -> now notify user of failure
+    pendingTimers.shift()!.fn()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(h.calls.runs).toBe(2)
+    expect(h.calls.notifications).toEqual([
+      'Catching up on missed scheduled sync',
+      'fetch failed',
+    ])
   })
 })

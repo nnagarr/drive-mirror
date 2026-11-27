@@ -101,6 +101,73 @@ describe('the token endpoints', () => {
     expect(String(calls[0].body)).toContain('refresh_token=RT')
   })
 
+  it('retries transient network errors when refreshing an access token', async () => {
+    let attempts = 0
+    const impl = (async () => {
+      attempts += 1
+      if (attempts < 3) {
+        throw new TypeError('fetch failed')
+      }
+      return new Response(
+        JSON.stringify({ access_token: 'AT-RECOVERED', expires_in: 3600 }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as unknown as typeof fetch
+
+    const refreshed = await refreshAccessToken(
+      { clientId: 'CID', clientSecret: 'CS', refreshToken: 'RT' },
+      impl,
+      async () => {},
+    )
+
+    expect(attempts).toBe(3)
+    expect(refreshed.access_token).toBe('AT-RECOVERED')
+  })
+
+  it('retries 5xx responses when refreshing an access token', async () => {
+    let attempts = 0
+    const impl = (async () => {
+      attempts += 1
+      if (attempts === 1) {
+        return new Response('unavailable', { status: 503 })
+      }
+      return new Response(
+        JSON.stringify({ access_token: 'AT-5XX-OK', expires_in: 3600 }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as unknown as typeof fetch
+
+    const refreshed = await refreshAccessToken(
+      { clientId: 'CID', clientSecret: 'CS', refreshToken: 'RT' },
+      impl,
+      async () => {},
+    )
+
+    expect(attempts).toBe(2)
+    expect(refreshed.access_token).toBe('AT-5XX-OK')
+  })
+
+  it('does not retry 4xx refusals when refreshing an access token', async () => {
+    let attempts = 0
+    const impl = (async () => {
+      attempts += 1
+      return new Response(JSON.stringify({ error: 'invalid_grant' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }) as unknown as typeof fetch
+
+    await expect(
+      refreshAccessToken(
+        { clientId: 'CID', clientSecret: 'CS', refreshToken: 'RT' },
+        impl,
+        async () => {},
+      ),
+    ).rejects.toThrow('400')
+
+    expect(attempts).toBe(1)
+  })
+
   it('does not put the client secret in the error message', async () => {
     const { impl } = stub({ error: 'invalid_grant' }, 400)
 
