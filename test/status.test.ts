@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { AppSettings, AccountSummary } from '../src/main/settings'
 import type { AppState, MirrorCard, RunSummary } from '../src/main/ipc'
-import { verdict, rowStatus, folderNeedsYou } from '../src/renderer/status'
+import { verdict, rowStatus, folderNeedsYou, overridableMirror } from '../src/renderer/status'
 
 const rt = () => '2 minutes ago'
 
@@ -187,6 +187,27 @@ describe('verdict', () => {
     expect(v.dot).toBe('attention')
   })
 
+  it('attention: skipped mirror without live guard event shows mirror note', () => {
+    const v = verdict({
+      settings: settings(),
+      state: state({
+        mirrors: [
+          card({
+            status: 'skipped',
+            note: 'the number of files fell by more than half in: the root',
+            canOverride: true,
+          }),
+        ],
+      }),
+      summary: summary(),
+      guard: null,
+      relativeTime: rt,
+    })
+    expect(v.kind).toBe('attention')
+    expect(v.sentence).toBe('1 folder needs you.')
+    expect(v.subline).toContain('fell by more than half')
+  })
+
   it('attention: blocked recovered file', () => {
     const v = verdict({
       settings: settings(),
@@ -279,4 +300,33 @@ describe('folderNeedsYou', () => {
   it('blocked recovered', () => expect(folderNeedsYou(card({ recovered: [{ driveFileId: 'f1', path: 'x', at: 't', blocked: 'nope' }] }))).toBe(true))
   it('errors', () => expect(folderNeedsYou(card({ counts: { uploaded: 0, updated: 0, downloaded: 0, trashed: 0, errors: 1 } }))).toBe(true))
   it('up to date', () => expect(folderNeedsYou(card({ status: 'idle', lastSyncedAt: 't' }))).toBe(false))
+})
+
+describe('overridableMirror', () => {
+  it('prefers the active guard when canOverride is true', () => {
+    expect(
+      overridableMirror(
+        [card({ name: 'Docs', status: 'skipped', canOverride: true })],
+        { mirror: 'Photos', canOverride: true },
+      ),
+    ).toBe('Photos')
+  })
+
+  it('falls back to a skipped mirror with canOverride when guard event is null', () => {
+    expect(
+      overridableMirror(
+        [card({ name: 'Docs', status: 'skipped', canOverride: true })],
+        null,
+      ),
+    ).toBe('Docs')
+  })
+
+  it('returns null when no mirror can be overridden', () => {
+    expect(
+      overridableMirror(
+        [card({ name: 'Docs', status: 'skipped', canOverride: false })],
+        null,
+      ),
+    ).toBeNull()
+  })
 })

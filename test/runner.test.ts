@@ -435,6 +435,43 @@ describe('the sync runner', () => {
     expect(after.mirrors['Medicine']?.lastCounts['']).toBe(1)
   })
 
+  it('detects a count-drop during prime before a sync runs and keeps skipped status across state polls', async () => {
+    const box = await harness()
+    for (let i = 0; i < 6; i += 1) {
+      await writeFile(join(box.root, `f${i}.psd`), 'local bytes')
+    }
+    const r = runner(box)
+    await r.syncNow(ACC)
+
+    // Delete all files locally without syncing again.
+    for (let i = 0; i < 6; i += 1) {
+      await rm(join(box.root, `f${i}.psd`))
+    }
+
+    await r.prime(ACC)
+
+    const st1 = await r.state(ACC)
+    expect(st1.mirrors[0]?.fileCount).toBe(0)
+    expect(st1.mirrors[0]?.status).toBe('skipped')
+    expect(st1.mirrors[0]?.canOverride).toBe(true)
+    expect(st1.mirrors[0]?.note).toContain('more than half')
+
+    // A subsequent state() poll must not clobber the primed skipped state with persisted idle.
+    const st2 = await r.state(ACC)
+    expect(st2.mirrors[0]?.status).toBe('skipped')
+    expect(st2.mirrors[0]?.canOverride).toBe(true)
+
+    // Restoring the files locally clears the primed guard on next prime().
+    for (let i = 0; i < 6; i += 1) {
+      await writeFile(join(box.root, `f${i}.psd`), 'local bytes')
+    }
+    await r.prime(ACC)
+    const st3 = await r.state(ACC)
+    expect(st3.mirrors[0]?.fileCount).toBe(6)
+    expect(st3.mirrors[0]?.status).toBe('idle')
+    expect(st3.mirrors[0]?.note).toBeUndefined()
+  })
+
   it('writes only inside the resolved mirror folder', async () => {
     const box = await harness()
     await mkdir(join(box.root, 'sub'), { recursive: true })

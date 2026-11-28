@@ -94,13 +94,19 @@ function emit(event: AppEvent): void {
   if (isHidden && (event.type === 'notice' || event.type === 'error' || event.type === 'guard')) {
     // There is no window to show this in, so it waits for the next time
     // the app is opened - and the user is told now.
-    void rememberNotice(event.message)
+    void rememberNotice(event.message, event.accountId)
     showNotification('Drive Mirror', event.message)
   }
 }
 
 /** Leave a note for the user for something that happened unwatched. */
-async function rememberNotice(message: string): Promise<void> {
+async function rememberNotice(message: string, accountId: string | null): Promise<void> {
+  if (accountId) {
+    const accountSettings = await accountSettingsFor(accountId)
+    const next = await setPendingNotice(accountSettings, message, new Date())
+    await saveAccountSettingsFor(accountId, { pendingNotice: next.pendingNotice })
+    return
+  }
   const settings = await currentSettings()
   const next = await setPendingNotice(settings, message, new Date())
   await settingsStore.patch({ pendingNotice: next.pendingNotice })
@@ -824,6 +830,18 @@ if (!syncOnce && !app.requestSingleInstanceLock()) {
         event.preventDefault()
         mainWindow?.hide()
       }
+    })
+
+    // Re-scan local counts and safety guards when the user returns to the window
+    // so deletions made outside the app surface on Home before a sync runs.
+    let lastFocusPrimeAt = 0
+    mainWindow.on('focus', () => {
+      const now = Date.now()
+      if (now - lastFocusPrimeAt < 3000) return
+      lastFocusPrimeAt = now
+      void currentAccountId()
+        .then((id) => (id ? runner.prime(id) : undefined))
+        .catch(() => undefined)
     })
 
     // Fill in the file counts so the window shows the real trees before

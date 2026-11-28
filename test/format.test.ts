@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   formatFriendlyDate,
   formatLastRunCounts,
+  formatRunStatus,
   pluralize,
   relativeTime,
   countWith,
@@ -80,6 +81,41 @@ describe('formatLastRunCounts', () => {
 
   it('includes moved to trash when non-zero', () => {
     expect(formatLastRunCounts({ uploaded: 0, updated: 0, downloaded: 0, trashed: 2, errors: 1 })).toBe('2 moved to trash · 1 error')
+  })
+})
+
+describe('formatRunStatus', () => {
+  it('returns Everything up to date when quiet with no reports', () => {
+    expect(
+      formatRunStatus({ uploaded: 0, updated: 0, downloaded: 0, trashed: 0, errors: 0, reports: [] }),
+    ).toBe('Everything up to date')
+  })
+
+  it('returns Needs attention when counts are zero but reports exist', () => {
+    expect(
+      formatRunStatus({
+        uploaded: 0,
+        updated: 0,
+        downloaded: 0,
+        trashed: 0,
+        errors: 0,
+        reports: [{ code: 'anomaly', relPath: '', message: 'guard tripped' }],
+      }),
+    ).toBe('Needs attention')
+  })
+
+  it('returns Skipped when run was skipped', () => {
+    expect(
+      formatRunStatus({
+        uploaded: 0,
+        updated: 0,
+        downloaded: 0,
+        trashed: 0,
+        errors: 0,
+        reports: [{ code: 'anomaly', relPath: '', message: 'another sync' }],
+        skipped: true,
+      }),
+    ).toBe('Skipped')
   })
 })
 

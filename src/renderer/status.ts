@@ -111,7 +111,8 @@ export function verdict(input: StatusInput): Verdict {
   if (hasGuard || anyBlocked || anySkipped) {
     const needsYouMirrors = mirrors.filter((m) => m.status === 'skipped' || m.status === 'attention' || m.recovered.some((r) => !!r.blocked))
     const n = Math.max(1, needsYouMirrors.length)
-    const reason = guard?.message ?? 'A folder needs your attention.'
+    const skippedNote = needsYouMirrors.find((m) => m.status === 'skipped' && m.note)?.note
+    const reason = guard?.message ?? skippedNote ?? 'A folder needs your attention.'
     const other = Math.max(0, mirrors.length - n)
     const subline = other > 0
       ? `${reason} The other ${other} folder${other === 1 ? '' : 's'} are backed up.`
@@ -159,4 +160,12 @@ export function folderNeedsYou(card: MirrorCard): boolean {
   if (card.status === 'error' || card.counts.errors > 0) return true
   if (card.recovered.some((r) => !!r.blocked)) return true
   return false
+}
+
+export function overridableMirror(
+  mirrors: MirrorCard[],
+  guard: { mirror: string; canOverride: boolean } | null,
+): string | null {
+  if (guard && guard.canOverride) return guard.mirror
+  return mirrors.find((m) => m.status === 'skipped' && m.canOverride)?.name ?? null
 }

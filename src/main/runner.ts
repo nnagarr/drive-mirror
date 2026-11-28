@@ -31,6 +31,7 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream, statSync } from 'node:fs'
+import type { Stats } from 'node:fs'
 import { mkdir, open, readFile, rm, stat, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -206,6 +207,10 @@ export interface Runner {
 interface AccountState {
   /** One card per mirror this account has. */
   cards: Map<string, MirrorCard>
+  /** Mirrors whose persisted UI status has been hydrated into `cards`. */
+  hydrated: Set<string>
+  /** Mirrors whose local file count has been measured on disk in this process. */
+  scanned: Set<string>
   /** The last run this account had. */
   lastRun: RunSummary | null
   /** Recent runs this account had. */
@@ -252,6 +257,8 @@ export function createRunner(deps: RunnerDeps): Runner {
     if (!state) {
       state = {
         cards: new Map<string, MirrorCard>(),
+        hydrated: new Set<string>(),
+        scanned: new Set<string>(),
         lastRun: null,
         runHistory: [],
         running: false,
@@ -326,7 +333,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     // Hydrate the last run from the persisted record whenever disk has a newer run
     const isNewerRun =
       settings.lastRun &&
-      (!state.lastRun || settings.lastRun.finishedAt >= state.lastRun.finishedAt)
+      (!state.lastRun || settings.lastRun.finishedAt > state.lastRun.finishedAt)
     if (isNewerRun && settings.lastRun) {
       state.lastRun = settings.lastRun
     }
@@ -350,7 +357,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           if (hasZeroCounts || isNewerRun) {
             mirrorCard.counts = { ...persisted.counts }
           }
-          if (mirrorCard.status === 'idle' || isNewerRun) {
+          if (!state.hydrated.has(config.name) || isNewerRun) {
             mirrorCard.status = persisted.status
             // A mirror the last run stopped keeps the reason with it, so
             // the drawer can show what happened without a new run.
@@ -363,13 +370,14 @@ export function createRunner(deps: RunnerDeps): Runner {
             }
           }
         }
+        state.hydrated.add(config.name)
         const mm = manifest.mirrors[config.name]
         if (mm?.lastSyncAt) {
           if (!mirrorCard.lastSyncedAt || mm.lastSyncAt >= mirrorCard.lastSyncedAt) {
             mirrorCard.lastSyncedAt = mm.lastSyncAt
           }
         }
-        if (mirrorCard.fileCount === 0 && mm?.lastCounts?.['']) {
+        if (!state.scanned.has(config.name) && mirrorCard.fileCount === 0 && mm?.lastCounts?.['']) {
           mirrorCard.fileCount = mm.lastCounts[''] ?? 0
         }
         mirrorCard.localRoot = config.root
@@ -424,38 +432,47 @@ export function createRunner(deps: RunnerDeps): Runner {
     })()
   }
 
+  type LocalGuardOutcome =
+    | {
+        blocked: true
+        reason: 'missing-root' | 'volume-changed' | 'count-drop'
+        message: string
+        canOverride: boolean
+        local?: LocalTree
+      }
+    | {
+        blocked: false
+        rootStat: Stats
+        driveLetter: string | null
+        local: LocalTree
+      }
+
+  /** True when a skipped mirror's note came from a local guard (root, volume, or count-drop). */
+  function isLocalGuardNote(note: string | undefined, canOverride: boolean | undefined): boolean {
+    return canOverride === true || (note?.startsWith('the folder ') ?? false)
+  }
+
   /**
-   * Run one mirror.
+   * Run the three local safety guards (missing root, volume serial, count drop)
+   * and scan the mirror's directory tree.
    */
-  async function runMirror(
-    accountId: string,
-    account: AccountRuntime,
+  async function evaluateLocalGuards(
     config: MirrorConfig,
+    mirrorManifest: MirrorManifest,
     manifest: Manifest,
-    overrideGuard: boolean,
-    guardThreshold: number,
-  ): Promise<{ counts: Counts; changed: Array<{ mirror: string; relPath: string; action: string }>; reports: Report[]; skipped: boolean }> {
-    const changed: Array<{ mirror: string; relPath: string; action: string }> = []
-    const reports: Report[] = []
-    const counts = noCounts()
-    const mirrorCard = card(accountId, config.name)
-
-    const mirrorManifest = manifest.mirrors[config.name] ?? emptyMirror(config.root)
-
+    options: { knownPaths: string[]; overrideGuard: boolean; guardThreshold: number },
+  ): Promise<LocalGuardOutcome> {
     // --- Guard 1: the local root must exist -------------------------
-    let rootStat: ReturnType<typeof statSync>
+    let rootStat: Stats
     try {
       rootStat = statSync(config.root)
     } catch {
-      skipMirror(
-        accountId,
-        config.name,
-        'missing-root',
-        `the folder ${config.root} does not exist`,
-        false,
-        reports,
-      )
-      return { counts, changed, reports, skipped: true }
+      return {
+        blocked: true,
+        reason: 'missing-root',
+        message: `the folder ${config.root} does not exist`,
+        canOverride: false,
+      }
     }
 
     // --- Guard 2: the volume must be the same one -------------------
@@ -475,62 +492,93 @@ export function createRunner(deps: RunnerDeps): Runner {
       //    letter or a swapped disk changes the serial.
       const recorded = manifest.volumes[driveLetter]
       if (checkVolumeFingerprint(recorded, { dev: driveDev ?? rootStat.dev })) {
-      skipMirror(
-        accountId,
-        config.name,
-        'volume-changed',
-        `the drive ${driveLetter} is now a different volume, so the files on it are not the ones that were mirrored`,
-        true,
-        reports,
-      )
-        return { counts, changed, reports, skipped: true }
+        return {
+          blocked: true,
+          reason: 'volume-changed',
+          message: `the drive ${driveLetter} is now a different volume, so the files on it are not the ones that were mirrored`,
+          canOverride: true,
+        }
       }
 
       // 2. The mirror's own root must be on that drive. A folder that has
       //    become a junction to another disk would otherwise look like
       //    every file was deleted.
       if (driveDev !== null && driveDev !== rootStat.dev) {
-      skipMirror(
-        accountId,
-        config.name,
-        'volume-changed',
-        `the folder ${config.root} is on a different volume from the drive ${driveLetter}`,
-        true,
-        reports,
-      )
-        return { counts, changed, reports, skipped: true }
+        return {
+          blocked: true,
+          reason: 'volume-changed',
+          message: `the folder ${config.root} is on a different volume from the drive ${driveLetter}`,
+          canOverride: true,
+        }
       }
     }
 
     // The scan tells us what is on disk, and how many files each folder
     // holds.
+    const local = await scanLocal({ root: config.root, knownPaths: options.knownPaths })
+
+    // --- Guard 3: no folder may have lost more than half its files ---
+    if (!options.overrideGuard) {
+      const hits = checkCountDrop(
+        mirrorManifest.lastCounts,
+        local.recursiveCounts,
+        options.guardThreshold,
+      )
+      if (hits.length > 0) {
+        const where = hits.map((hit) => hit.dir || 'the root').join(', ')
+        return {
+          blocked: true,
+          reason: 'count-drop',
+          message: `the number of files fell by more than half in: ${where}`,
+          canOverride: true,
+          local,
+        }
+      }
+    }
+
+    return { blocked: false, rootStat, driveLetter, local }
+  }
+
+  /**
+   * Run one mirror.
+   */
+  async function runMirror(
+    accountId: string,
+    account: AccountRuntime,
+    config: MirrorConfig,
+    manifest: Manifest,
+    overrideGuard: boolean,
+    guardThreshold: number,
+  ): Promise<{ counts: Counts; changed: Array<{ mirror: string; relPath: string; action: string }>; reports: Report[]; skipped: boolean }> {
+    const changed: Array<{ mirror: string; relPath: string; action: string }> = []
+    const reports: Report[] = []
+    const counts = noCounts()
+    const mirrorCard = card(accountId, config.name)
+
+    const mirrorManifest = manifest.mirrors[config.name] ?? emptyMirror(config.root)
+
     const knownPaths = [
       ...Object.keys(mirrorManifest.files),
       ...Object.values(mirrorManifest.files).map((entry) => entry.localPath),
       ...Object.values(mirrorManifest.retired).map((record) => record.path),
     ]
-    const local = await scanLocal({ root: config.root, knownPaths })
-
-    // --- Guard 3: no folder may have lost more than half its files ---
-    if (!overrideGuard) {
-      const hits = checkCountDrop(
-        mirrorManifest.lastCounts,
-        local.recursiveCounts,
-        guardThreshold,
-      )
-      if (hits.length > 0) {
-        const where = hits.map((hit) => hit.dir || 'the root').join(', ')
+    const guard = await evaluateLocalGuards(config, mirrorManifest, manifest, {
+      knownPaths,
+      overrideGuard,
+      guardThreshold,
+    })
+    if (guard.blocked) {
       skipMirror(
         accountId,
         config.name,
-        'count-drop',
-        `the number of files fell by more than half in: ${where}`,
-        true,
+        guard.reason,
+        guard.message,
+        guard.canOverride,
         reports,
       )
-        return { counts, changed, reports, skipped: true }
-      }
+      return { counts, changed, reports, skipped: true }
     }
+    const { rootStat, driveLetter, local } = guard
 
     // --- Guard 4: resolve the Drive folder ---------------------------
     stateFor(accountId).phase = 'folders'
@@ -685,6 +733,8 @@ export function createRunner(deps: RunnerDeps): Runner {
     mirrorCard.fileCount = local.recursiveCounts[''] ?? 0
     mirrorCard.lastSyncedAt = mirrorManifest.lastSyncAt ?? null
     mirrorCard.counts = counts
+    stateFor(accountId).hydrated.add(config.name)
+    stateFor(accountId).scanned.add(config.name)
 
     return { counts, changed, reports, skipped: false }
   }
@@ -698,6 +748,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     reports: Report[],
   ): void {
     const mirrorCard = card(accountId, name)
+    stateFor(accountId).hydrated.add(name)
     mirrorCard.status = 'skipped'
     // The reason travels with the card, so the folder's drawer can show
     // what happened even after the app has been restarted.
@@ -951,13 +1002,15 @@ export function createRunner(deps: RunnerDeps): Runner {
 
   const runner: Runner = {
     async prime(accountId: string): Promise<void> {
+      const state = stateFor(accountId)
+      if (state.running) return
       const account = await deps.account(accountId)
       if (!account) return
       const settings = await account.settings()
-      const state = stateFor(accountId)
+      const guardThreshold = (await deps.appSettings()).guardThreshold
       const isNewerRun =
         settings.lastRun &&
-        (!state.lastRun || settings.lastRun.finishedAt >= state.lastRun.finishedAt)
+        (!state.lastRun || settings.lastRun.finishedAt > state.lastRun.finishedAt)
       if (isNewerRun && settings.lastRun) {
         state.lastRun = settings.lastRun
       }
@@ -983,7 +1036,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           if (hasZeroCounts || isNewerRun) {
             mirrorCard.counts = { ...persisted.counts }
           }
-          if (mirrorCard.status === 'idle' || isNewerRun) {
+          if (!state.hydrated.has(config.name) || isNewerRun) {
             mirrorCard.status = persisted.status
             if (persisted.status === 'skipped') {
               mirrorCard.note = persisted.note
@@ -1000,12 +1053,39 @@ export function createRunner(deps: RunnerDeps): Runner {
             mirrorCard.lastSyncedAt = mirrorManifest.lastSyncAt
           }
         }
-        try {
-          const local = await scanLocal({ root: config.root, knownPaths: [] })
-          mirrorCard.fileCount = local.recursiveCounts[''] ?? mirrorCard.fileCount
-        } catch {
-          // The folder is not there. A run will say so.
+        if (!config.enabled) {
+          try {
+            const local = await scanLocal({ root: config.root, knownPaths: [] })
+            mirrorCard.fileCount = local.recursiveCounts[''] ?? 0
+            state.scanned.add(config.name)
+          } catch {
+            // The folder is not there; paused mirrors stay paused.
+          }
+        } else {
+          const guard = await evaluateLocalGuards(
+            config,
+            mirrorManifest ?? emptyMirror(config.root),
+            manifest,
+            { knownPaths: [], overrideGuard: false, guardThreshold },
+          )
+          if (guard.local) {
+            mirrorCard.fileCount = guard.local.recursiveCounts[''] ?? 0
+            state.scanned.add(config.name)
+          }
+          if (guard.blocked) {
+            mirrorCard.status = 'skipped'
+            mirrorCard.note = guard.message
+            mirrorCard.canOverride = guard.canOverride
+          } else if (
+            mirrorCard.status === 'skipped' &&
+            isLocalGuardNote(mirrorCard.note, mirrorCard.canOverride)
+          ) {
+            mirrorCard.status = mirrorCard.counts.errors > 0 ? 'error' : 'idle'
+            mirrorCard.note = undefined
+            mirrorCard.canOverride = undefined
+          }
         }
+        state.hydrated.add(config.name)
       }
       emitState(accountId)
     },

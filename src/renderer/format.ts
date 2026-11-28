@@ -99,6 +99,16 @@ export function summaryIsQuiet(summary: RunOutcome): boolean {
   )
 }
 
+/** Format a run's overall status for LastRun and Activity history badges. */
+export function formatRunStatus(summary: RunOutcome & { skipped?: boolean }): string {
+  if (summary.skipped) return 'Skipped'
+  const countsText = formatLastRunCounts(summary)
+  if (!summaryIsQuiet(summary) && countsText === 'Everything up to date') {
+    return 'Needs attention'
+  }
+  return countsText
+}
+
 /**
  * Format an ISO date string into a friendly localized human-readable date.
  * Returns null if the input is null, undefined, empty, or unparseable.

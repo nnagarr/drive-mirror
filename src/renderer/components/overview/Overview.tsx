@@ -1,8 +1,8 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { JSX } from 'react'
 import type { AppState, RunSummary } from '../../../main/ipc'
 import type { AppSettings } from '../../../main/settings'
-import { verdict } from '../../status'
+import { folderNeedsYou, overridableMirror, verdict } from '../../status'
 import { Verdict } from './Verdict'
 import { FolderList } from './FolderList'
 import { LastRun } from './LastRun'
@@ -80,6 +80,20 @@ export function Overview({
 
   const mirrors = state?.mirrors ?? []
   const currentAccount = settings?.currentAccountId
+  const [filter, setFilter] = useState<'all' | 'needs-you' | 'paused'>('all')
+  const hasNeedsYou = mirrors.some((m) => folderNeedsYou(m))
+  const hasPaused = mirrors.some((m) => !m.enabled)
+  const activeFilter =
+    (filter === 'needs-you' && !hasNeedsYou) || (filter === 'paused' && !hasPaused)
+      ? 'all'
+      : filter
+  const visibleMirrors =
+    activeFilter === 'needs-you'
+      ? mirrors.filter((m) => folderNeedsYou(m))
+      : activeFilter === 'paused'
+        ? mirrors.filter((m) => !m.enabled)
+        : mirrors
+  const overrideTarget = overridableMirror(mirrors, guard)
 
   const handlePrimary = (): void => {
     switch (v.kind) {
@@ -156,21 +170,35 @@ export function Overview({
         verdict={v}
         onPrimary={handlePrimary}
         onSecondary={handleSecondary}
-        onOverride={guard && guard.canOverride && onOverride ? () => onOverride(guard.mirror) : undefined}
+        onOverride={overrideTarget && onOverride ? () => onOverride(overrideTarget) : undefined}
       />
 
       {mirrors.length > 0 && (
         <div className="overview__filters">
-          <button type="button" className="filter-tab active">
+          <button
+            type="button"
+            className={`filter-tab ${activeFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setFilter('all')}
+          >
             All {mirrors.length}
           </button>
-          {mirrors.some((m) => m.status === 'skipped' || m.status === 'attention' || m.counts.errors > 0) && (
-            <button type="button" className="filter-tab">
+          {hasNeedsYou && (
+            <button
+              type="button"
+              className={`filter-tab ${activeFilter === 'needs-you' ? 'active' : ''}`}
+              onClick={() => setFilter('needs-you')}
+            >
               Needs you
             </button>
           )}
-          {mirrors.some((m) => !m.enabled) && (
-            <button type="button" className="filter-tab">Paused</button>
+          {hasPaused && (
+            <button
+              type="button"
+              className={`filter-tab ${activeFilter === 'paused' ? 'active' : ''}`}
+              onClick={() => setFilter('paused')}
+            >
+              Paused
+            </button>
           )}
           <button type="button" className="button button--sage filter-tab__add" onClick={onAddFolder}>
             + Add folder
@@ -191,7 +219,7 @@ export function Overview({
           />
         ) : (
           <FolderList
-            mirrors={mirrors}
+            mirrors={visibleMirrors}
             onSync={onSync}
             onEdit={onEdit}
             onPauseResume={onPauseResume}

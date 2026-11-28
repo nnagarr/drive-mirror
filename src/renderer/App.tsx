@@ -111,6 +111,9 @@ export function App(): JSX.Element {
       if (account.pendingNotice) {
         setNotice(account.pendingNotice.message)
         void window.driveMirror.saveAccountSettings({ pendingNotice: null })
+      } else if (app.pendingNotice) {
+        setNotice(app.pendingNotice.message)
+        void window.driveMirror.saveSettings({ pendingNotice: null })
       }
     } catch {
       // The state will be right the next time something happens.

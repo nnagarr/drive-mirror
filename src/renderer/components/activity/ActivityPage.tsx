@@ -1,6 +1,6 @@
 import { useState, type JSX } from 'react'
 import type { RunSummary } from '../../../main/ipc'
-import { relativeTime, formatLastRunCounts, countWith } from '../../format'
+import { relativeTime, formatLastRunCounts, formatRunStatus, summaryIsQuiet, countWith } from '../../format'
 import { ChangedTable } from './ChangedTable'
 import { ReportsTable } from './ReportsTable'
 
@@ -47,19 +47,16 @@ export function ActivityPage({ summary, history = [], running, signedOut, onSync
           <div className="activity__history-list" role="tablist">
             {runs.map((r, idx) => {
               const isSelected = idx === activeIndex
-              const isQuiet =
-                r.uploaded === 0 &&
-                r.updated === 0 &&
-                r.downloaded === 0 &&
-                r.trashed === 0 &&
-                r.errors === 0
-              const badge = r.errors > 0
-                ? `${r.errors} errors`
-                : r.uploaded > 0
-                  ? `${r.uploaded} uploaded`
-                  : isQuiet
-                    ? 'All up to date'
-                    : formatLastRunCounts(r)
+              const isQuiet = summaryIsQuiet(r)
+              const badge = r.skipped
+                ? 'Skipped'
+                : r.errors > 0
+                  ? `${r.errors} errors`
+                  : r.uploaded > 0
+                    ? `${r.uploaded} uploaded`
+                    : isQuiet
+                      ? 'All up to date'
+                      : formatRunStatus(r)
 
               return (
                 <button
